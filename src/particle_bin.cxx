@@ -55,6 +55,33 @@ namespace
                     st[ijk] -= w_particle * (s[ijk+kstride]-s[ijk])*dzhi[k+1];
                 }
     }
+
+
+    template<typename TF>
+    void calculate_surface_flux(
+            TF* const restrict flux,
+            const TF* const restrict s,
+            const TF* const restrict dzhi,
+            const TF* const restrict z,
+            const TF w_particle,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int kstart,
+            const int jstride, const int kstride)
+    {
+        const int k = kstart;
+
+        for (int j=jstart; j<jend; ++j)
+            for (int i=istart; i<iend; ++i)
+            {
+                const int ij = i + j*jstride;
+                const int ijk = ij + k*kstride;
+
+                const TF dsdz = (s[ijk+kstride] - s[ijk]) * dzhi[k+1];
+                const TF s_bot = s[ijk] - dsdz * z[k];
+                flux[ij] = w_particle * s_bot;
+            }
+    }
 }
 
 
@@ -130,6 +157,20 @@ void Particle_bin<TF>::exec(Stats<TF>& stats)
 
     auto& gd = grid.get_grid_data();
 
+    // Calculate surface flux.
+    for (auto& w : w_particle)
+        calculate_surface_flux<TF>(
+                fields.sp.at(w.first)->flux_bot.data(),
+                fields.sp.at(w.first)->fld.data(),
+                gd.dzhi.data(),
+                gd.z.data(),
+                w.second,
+                gd.istart, gd.iend,
+                gd.jstart, gd.jend,
+                gd.kstart,
+                gd.icells, gd.ijcells);
+
+    // Calculate tendency gravitational settling.
     for (auto& w : w_particle)
         settle_particles<TF>(
                 fields.st.at(w.first)->fld.data(),

@@ -107,6 +107,8 @@ for i in range(len(particle_list)):
 
 # Statistics/crosses/...
 scalar_crosses = particle_list + [s+'_path' for s in particle_list]
+scalar_crosses += [s+'_fluxbot' for s in particle_list]
+
 ini['cross']['crosslist'] = scalar_crosses + ['th', 'u', 'v', 'w']
 ini['cross']['xz'] = y0
 ini['cross']['yz'] = x0

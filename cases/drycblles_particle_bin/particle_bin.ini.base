@@ -2,8 +2,8 @@
 # All `None` settings are set by `dust_input.py`, and finally written into a new `dust.ini` file.
 
 [master]
-npx=1
-npy=1
+npx=2
+npy=4
 
 [grid]
 itot=None
@@ -60,7 +60,6 @@ flow_direction[south]=outflow
 [particle_bin]
 sw_particle=1
 particle_list=None
-w_particle=None
 
 [fields]
 visc=1.e-5
