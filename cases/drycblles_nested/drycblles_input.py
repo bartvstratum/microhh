@@ -20,9 +20,9 @@ domain = sys.argv[1]
 General settings.
 """
 dtype = np.float64
-n_ghost = 1
+n_ghost = 3
 n_sponge = 3
-lbc_freq = 60
+lbc_freq = 30
 
 
 """
