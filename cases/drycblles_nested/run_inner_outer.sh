@@ -1,4 +1,4 @@
-np=4
+np=8
 
 rm *00*
 python drycblles_input.py outer

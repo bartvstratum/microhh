@@ -1,23 +1,23 @@
 [master]
-npx=1
-npy=1
+npx=2
+npy=4
 
 [grid]
-itot=64
-jtot=64
-ktot=64
+itot=None
+jtot=None
+ktot=None
 
-xsize=6400.
-ysize=6400.
-zsize=3200
+xsize=None
+ysize=None
+zsize=None
 
 swspatialorder=2
 
 [pres]
-swopenbc=None
+sw_openbc=None
 
 [advec]
-swadvec=None
+swadvec=2
 cflmax=1.2
 
 [diff]
@@ -52,25 +52,21 @@ swboundary=surface
 z0m=0.1
 z0h=0.1
 
-sw_inoutflow=None
-inoutflow_slist=s,th
-sw_inoutflow_uv=true
-sw_inoutflow_w=true
+[boundary_lateral]
+sw_openbc=None
+sw_openbc_uv=true
+sw_openbc_w=true
 sw_neumann_w=false
+
+slist=s,th
 sw_timedep=true
+loadfreq=None
 
-sw_sponge=true
-n_sponge=5
-w_diff=0.003
-tau_nudge=60
-
-#sw_perturb=true
-#perturb_list=th,s
-#perturb_width=4
-#perturb_block=4
-#perturb_ampl[s]=0.1
-#perturb_ampl[th]=0.01
-#perturb_zmax=250
+# Lateral sponge layer.
+sw_sponge=None
+n_sponge=None
+tau_sponge=60
+w_diff=0.000
 
 [fields]
 visc=1.e-5
@@ -107,7 +103,7 @@ sampletime=60
 [cross]
 swcross=1
 crosslist=u,v,w,th,s
-sampletime=60
+sampletime=None
 xy=25,100,250,500,1000,2000,3200
 xz=0
 yz=0

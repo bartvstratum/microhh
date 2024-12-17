@@ -373,7 +373,7 @@ def write_lbcs_as_binaries(
             out.tofile(f'{output_dir}/lbc_{var}.{times[t]:07d}')
 
 
-def interp_lbcs_with_xr(lbc_ds, fld, loc, xz, yz, interpolation_method, float_type, output_dir):
+def interp_lbcs_with_xr(lbc_ds, fld, loc, xz, yz, interpolation_method, float_type):
     """
     Interpolate single LBC, and write as binary input file for MicroHH.
     """
@@ -391,16 +391,17 @@ def interp_lbcs_with_xr(lbc_ds, fld, loc, xz, yz, interpolation_method, float_ty
     yloc_in = 'yh' if 'yh' in yloc else 'y'
 
     # Switch between yz and xz crosses.
-    cc = yz if loc in ['west','east'] else xz
+    cross = yz if loc in ['west','east'] else xz
 
     # Interpolate!
-    ip = cc[fld].interp({yloc_in: lbc_ds[yloc], xloc_in: lbc_ds[xloc]}, method=interpolation_method)
+    ip = cross[fld].interp({yloc_in: lbc_ds[yloc], xloc_in: lbc_ds[xloc]}, method=interpolation_method)
 
     # Check if interpolation was success.
     if np.any(np.isnan(ip[fld].values)):
         raise Exception('Interpolated BCs contain NaNs!')
 
-    ip[fld].values.astype(float_type).tofile(f'{output_dir}/lbc_{fld}_{loc}.0000000')
+    # Store back in input `lbc_ds`.
+    lbc_ds[name] = ip[fld]
 
     del ip
 
