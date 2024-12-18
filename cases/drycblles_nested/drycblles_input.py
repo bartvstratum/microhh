@@ -26,7 +26,7 @@ lbc_freq = 30
 
 
 """
-No vertical nesting for now!
+No vertical nesting in this setup.
 """
 ktot = 64
 zsize = 3200
@@ -220,3 +220,4 @@ if domain == 'inner':
 
     # Write LBCs as binary input for MicroHH.
     mlt.write_lbcs_as_binaries_old(lbc_ds, dtype, output_dir='.')
+    #mlt.write_lbcs_as_binaries(lbc_ds, fields, dtype)

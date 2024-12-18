@@ -349,7 +349,7 @@ def write_lbcs_as_binaries(
     None
     """
 
-    times = lbc_ds['time'].values
+    times = lbc_ds['time'].values.astype(np.int32)
     edges = ['west', 'north', 'east', 'south']
 
     for var in variables:
