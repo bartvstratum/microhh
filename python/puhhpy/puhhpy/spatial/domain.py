@@ -90,6 +90,10 @@ class Domain:
         if parent and (xstart_in_parent is None and ystart_in_parent is None and not center_in_parent):
             raise Exception('Child domains need to specify the relative location to its parent.')
 
+        if parent is None and center_in_parent or xstart_in_parent is not None or ystart_in_parent is not None:
+            raise Exception('Cant position child domain without parent.')
+
+
         self.itot = itot
         self.jtot = jtot
 
@@ -131,6 +135,7 @@ class Domain:
             self.xoffset = parent.xoffset + self.xstart_in_parent
             self.yoffset = parent.yoffset + self.ystart_in_parent
 
+
         # Check: half levels x/y parent and child need to coincide at lateral boundaries child.
         if self.parent is not None:
             if not np.isclose(self.xstart_in_parent % parent.dx, 0):
@@ -141,6 +146,9 @@ class Domain:
                 raise Exception('Invalid child size in x-direction, not a multiple of parent dx.')
             elif not np.isclose(self.ysize % parent.dy, 0):
                 raise Exception('Invalid child size in y-direction, not a multiple of parent dy.')
+
+        self.xend_in_parent = self.xstart_in_parent + self.xsize
+        self.yend_in_parent = self.ystart_in_parent + self.ysize
 
         # Calculate lat/lon of each grid point using provided Proj.4 / PyProj string.
         self.proj = None

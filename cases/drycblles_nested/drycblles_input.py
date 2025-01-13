@@ -7,14 +7,15 @@ import glob
 from datetime import datetime
 import asyncio
 
-# Avaiable in `microhh/python`:
+# Available in `microhh/python`:
 import microhh_lbc_tools as mlt
 import microhh_tools as mht
 
+# Make sure `/path/to/microhh/python/puhhpy` is in your Python path.
+from puhhpy.spatial import Domain
 
 # Get domain name from cmd line, either "inner" or "outer".
 domain = sys.argv[1]
-
 
 """
 General settings.
@@ -24,7 +25,6 @@ n_ghost = 3
 n_sponge = 3
 lbc_freq = 30
 
-
 """
 No vertical nesting in this setup.
 """
@@ -32,40 +32,26 @@ ktot = 64
 zsize = 3200
 dz = zsize / ktot
 
-
 """
-Grid settings outer domain.
+Domains
 """
-itot_parent = 64
-jtot_parent = 64
+d0 = Domain(
+    xsize = 3200,
+    ysize = 3200,
+    itot = 32,
+    jtot = 32
+)
 
-xsize_parent = 6400
-ysize_parent = 6400
+d1 = Domain(
+    xsize = 1600,
+    ysize = 1600,
+    itot = 96,
+    jtot = 96,
+    parent = d0,
+    center_in_parent=True
+)
 
-dx_parent = xsize_parent / itot_parent
-dy_parent = ysize_parent / jtot_parent
-
-
-"""
-Grid settings inner domain.
-"""
-refinement_fac = 3
-
-xstart_child = 1600
-ystart_child = 1600
-
-xsize_child = 3200
-ysize_child = 3200
-
-xend_child = xstart_child + xsize_child
-yend_child = ystart_child + ysize_child
-
-dx_child = dx_parent / refinement_fac
-dy_child = dy_parent / refinement_fac
-
-itot_child = int(xsize_child / dx_child)
-jtot_child = int(ysize_child / dy_child)
-
+d0.child = d1
 
 """
 Define initial fields/profiles.
@@ -113,22 +99,22 @@ ini['cross']['sampletime'] = lbc_freq
 if domain == 'outer':
 
     xz, yz = mlt.get_cross_locations_for_lbcs(
-            xstart_child,
-            ystart_child,
-            xend_child,
-            yend_child,
-            dx_parent,
-            dy_parent,
-            dx_child,
-            dy_child,
-            n_ghost,
-            n_sponge)
+            xstart_nest = d1.xstart_in_parent,
+            ystart_nest = d1.ystart_in_parent,
+            xend_nest = d1.xend_in_parent,
+            yend_nest = d1.yend_in_parent,
+            dx_parent = d0.dx,
+            dy_parent = d0.dy,
+            dx_child = d1.dx,
+            dy_child = d1.dy,
+            n_ghost = n_ghost,
+            n_sponge = n_sponge)
 
-    ini['grid']['itot'] = itot_parent
-    ini['grid']['jtot'] = jtot_parent
+    ini['grid']['itot'] = d0.itot
+    ini['grid']['jtot'] = d0.jtot
 
-    ini['grid']['xsize'] = xsize_parent
-    ini['grid']['ysize'] = ysize_parent
+    ini['grid']['xsize'] = d0.xsize
+    ini['grid']['ysize'] = d0.ysize
 
     ini['cross']['xz'] = list(xz)
     ini['cross']['yz'] = list(yz)
@@ -136,25 +122,23 @@ if domain == 'outer':
     ini['pres']['sw_openbc'] = False
     ini['boundary_lateral']['sw_openbc'] = False
 
-
 elif domain == 'inner':
 
-    ini['grid']['itot'] = itot_child
-    ini['grid']['jtot'] = jtot_child
+    ini['grid']['itot'] = d1.itot
+    ini['grid']['jtot'] = d1.jtot
 
-    ini['grid']['xsize'] = xsize_child
-    ini['grid']['ysize'] = ysize_child
+    ini['grid']['xsize'] = d1.xsize
+    ini['grid']['ysize'] = d1.ysize
 
     # Vertical crosses through center of domain.
-    ini['cross']['yz'] = (xend_child+xstart_child)/2
-    ini['cross']['xz'] = (yend_child+ystart_child)/2
+    ini['cross']['yz'] = d1.xsize/2
+    ini['cross']['xz'] = d1.ysize/2
 
     ini['pres']['sw_openbc'] = True
     ini['boundary_lateral']['sw_openbc'] = True
     ini['boundary_lateral']['sw_sponge'] = n_sponge > 0
     ini['boundary_lateral']['n_sponge'] = n_sponge
     ini['boundary_lateral']['loadfreq'] = lbc_freq
-
 
 ini.save('drycblles.ini', allow_overwrite=True)
 
@@ -177,17 +161,17 @@ if domain == 'inner':
     # Get xarray Dataset with coordinates of LBCs.
     lbc_ds = mlt.get_lbc_xr_dataset(
             fields,
-            xsize_child,
-            ysize_child,
-            itot_child,
-            jtot_child,
+            d1.xsize,
+            d1.ysize,
+            d1.itot,
+            d1.jtot,
             z,
             zh,
             time,
             n_ghost,
             n_sponge,
-            xstart_child,
-            ystart_child,
+            d1.xstart_in_parent,
+            d1.ystart_in_parent,
             dtype)
     
     for fld in fields:
