@@ -511,18 +511,18 @@ if __name__ == '__main__':
 
     # Time period.
     # NOTE: Included ERA5/CAMS data is limited to 2016-08-15 06:00 - 18:00 UTC.
-    start_date = datetime(year=2016, month=8, day=15, hour=6)
-    end_date   = datetime(year=2016, month=8, day=15, hour=18)
+    start_date = datetime(year=2016, month=8, day=15, hour=8)
+    end_date   = datetime(year=2016, month=8, day=15, hour=10)
 
     # Simple equidistant grid.
     zsize = 4000
     ktot = 160
 
-    itot = 512
-    jtot = 512
+    itot = 32
+    jtot = 32
 
-    xsize = 25600
-    ysize = 25600
+    xsize = 3200
+    ysize = 3200
 
     # Create input files.
     create_case_input(
@@ -542,5 +542,5 @@ if __name__ == '__main__':
             itot, jtot, ktot,
             xsize, ysize, zsize,
             TF,
-            npx=1,
-            npy=1)
+            npx=2,
+            npy=4)

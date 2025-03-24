@@ -261,7 +261,9 @@ Boundary_surface_lsm<TF>::Boundary_surface_lsm(
     swboundary = "surface_lsm";
 
     // Read .ini settings:
-    sw_constant_z0    = inputin.get_item<bool>("boundary",     "swconstantz0", "", true);
+    sw_constant_z0    = inputin.get_item<bool>("boundary", "swconstantz0", "", true);
+    sw_bulk_ra        = inputin.get_item<bool>("boundary", "swbulk_ra", "", false);
+
     sw_homogeneous    = inputin.get_item<bool>("land_surface", "swhomogeneous", "", true);
     sw_free_drainage  = inputin.get_item<bool>("land_surface", "swfreedrainage", "", true);
     sw_water          = inputin.get_item<bool>("land_surface", "swwater", "", false);
@@ -289,14 +291,6 @@ Boundary_surface_lsm<TF>::Boundary_surface_lsm(
     // Checks:
     if (sw_homogeneous && sw_water)
         throw std::runtime_error("Homogeneous land-surface with water is not supported!\n");
-
-    //#ifdef USECUDA
-    //ustar_g = 0;
-    //obuk_g  = 0;
-    //nobuk_g = 0;
-    //zL_sl_g = 0;
-    //f_sl_g  = 0;
-    //#endif
 }
 
 template<typename TF>
@@ -374,9 +368,11 @@ void Boundary_surface_lsm<TF>::exec(
     // NOTE: `get_buoyancy_surf` calculates the first model level buoyancy only,
     //       but since this is written at `kstart`, we can't use a 2D slice...
     auto buoy = fields.get_tmp();
-    auto b_bot = fields.get_tmp_xy();
 
-    thermo.get_buoyancy_surf(buoy->fld, *b_bot, false);
+    thermo.get_buoyancy_surf(buoy->fld, buoy->fld_bot, false);
+    thermo.get_buoyancy_fluxbot(buoy->flux_bot, false);
+
+    // Buoyancy gradient surface in base state.
     const TF db_ref = thermo.get_db_ref();
 
     const std::vector<TF>& rhorefh = thermo.get_basestate_vector("rhoh");
@@ -394,6 +390,9 @@ void Boundary_surface_lsm<TF>::exec(
     auto f2b = fields.get_tmp_xy();
     auto f3  = fields.get_tmp_xy();
     auto theta_mean_n = fields.get_tmp_xy();
+
+    // Switch between bulk or tile ra.
+    auto ra  = fields.get_tmp_xy();
 
     const double subdt = timeloop.get_sub_time_step();
 
@@ -464,65 +463,111 @@ void Boundary_surface_lsm<TF>::exec(
             gd.jstart, gd.jend,
             gd.icells);
 
+    // Calculate the bulk ustar, Obukhov length, and aerodynamic resistance.
+
+    if (sw_constant_z0)
+        lsmk::calc_stability<TF, true>(
+                ustar.data(),
+                obuk.data(),
+                buoy->flux_bot.data(),
+                ra.data(),
+                nobuk.data(),
+                (*dutot).data(),
+                buoy->fld.data(),
+                buoy->fld_bot.data(),
+                z0m.data(),
+                z0h.data(),
+                zL_sl.data(),
+                f_sl.data(),
+                db_ref,
+                gd.z[gd.kstart],
+                gd.istart, gd.iend,
+                gd.jstart, gd.jend,
+                gd.kstart,
+                gd.icells, gd.jcells,
+                gd.ijcells);
+    else
+        lsmk::calc_stability<TF, false>(
+                ustar.data(),
+                obuk.data(),
+                buoy->flux_bot.data(),
+                ra.data(),
+                nobuk.data(),
+                (*dutot).data(),
+                buoy->fld.data(),
+                buoy->fld_bot.data(),
+                z0m.data(),
+                z0h.data(),
+                zL_sl.data(),
+                f_sl.data(),
+                db_ref,
+                gd.z[gd.kstart],
+                gd.istart, gd.iend,
+                gd.jstart, gd.jend,
+                gd.kstart,
+                gd.icells, gd.jcells,
+                gd.ijcells);
+
+
     // Loop over tiles, and calculate tile properties and fluxes
     for (auto& tile : tiles)
     {
         bool use_cs_veg = (tile.first == "veg");
 
-        //
-        // 1) Calculate obuk/ustar/ra using thl_bot and qt_bot
-        // from previous time step (= old method, similar to DALES).
-        // 2) Calculate new thl_bot such that SEB closes.
-        //
-        thermo.get_buoyancy_surf(
-                buoy->fld_bot,
-                tile.second.thl_bot,
-                tile.second.qt_bot);
+        if (!sw_bulk_ra)
+        {
+            // Calculate stability / ustar / obuk / ra using tile properties.
 
-        // Calculate Obuk, ustar, and ra.
-        if (sw_constant_z0)
-            lsmk::calc_stability<TF, true>(
-                    tile.second.ustar.data(),
-                    tile.second.obuk.data(),
-                    tile.second.bfluxbot.data(),
-                    tile.second.ra.data(),
-                    tile.second.nobuk.data(),
-                    (*dutot).data(),
-                    buoy->fld.data(),
-                    buoy->fld_bot.data(),
-                    z0m.data(), z0h.data(),
-                    zL_sl.data(),
-                    f_sl.data(),
-                    db_ref,
-                    gd.z[gd.kstart],
-                    gd.istart, gd.iend,
-                    gd.jstart, gd.jend,
-                    gd.kstart,
-                    gd.icells, gd.jcells,
-                    gd.ijcells);
-        else
-            lsmk::calc_stability<TF, false>(
-                    tile.second.ustar.data(),
-                    tile.second.obuk.data(),
-                    tile.second.bfluxbot.data(),
-                    tile.second.ra.data(),
-                    tile.second.nobuk.data(),
-                    (*dutot).data(),
-                    buoy->fld.data(),
-                    buoy->fld_bot.data(),
-                    z0m.data(), z0h.data(),
-                    zL_sl.data(),
-                    f_sl.data(),
-                    db_ref,
-                    gd.z[gd.kstart],
-                    gd.istart, gd.iend,
-                    gd.jstart, gd.jend,
-                    gd.kstart,
-                    gd.icells, gd.jcells,
-                    gd.ijcells);
+            thermo.get_buoyancy_surf(
+                    buoy->fld_bot,
+                    tile.second.thl_bot,
+                    tile.second.qt_bot);
 
-        //dump_field(tile.second.ustar.data(), "dump_cpu", gd.ijcells);
-        //throw 1;
+            // Calculate Obuk, ustar, and ra.
+            if (sw_constant_z0)
+                lsmk::calc_stability<TF, true>(
+                        tile.second.ustar.data(),
+                        tile.second.obuk.data(),
+                        tile.second.bfluxbot.data(),
+                        tile.second.ra.data(),
+                        tile.second.nobuk.data(),
+                        (*dutot).data(),
+                        buoy->fld.data(),
+                        buoy->fld_bot.data(),
+                        z0m.data(),
+                        z0h.data(),
+                        zL_sl.data(),
+                        f_sl.data(),
+                        db_ref,
+                        gd.z[gd.kstart],
+                        gd.istart, gd.iend,
+                        gd.jstart, gd.jend,
+                        gd.kstart,
+                        gd.icells, gd.jcells,
+                        gd.ijcells);
+            else
+                lsmk::calc_stability<TF, false>(
+                        tile.second.ustar.data(),
+                        tile.second.obuk.data(),
+                        tile.second.bfluxbot.data(),
+                        tile.second.ra.data(),
+                        tile.second.nobuk.data(),
+                        (*dutot).data(),
+                        buoy->fld.data(),
+                        buoy->fld_bot.data(),
+                        z0m.data(),
+                        z0h.data(),
+                        zL_sl.data(),
+                        f_sl.data(),
+                        db_ref,
+                        gd.z[gd.kstart],
+                        gd.istart, gd.iend,
+                        gd.jstart, gd.jend,
+                        gd.kstart,
+                        gd.icells, gd.jcells,
+                        gd.ijcells);
+        }
+
 
         // Calculate surface fluxes
         lsmk::calc_fluxes(
@@ -994,6 +1039,7 @@ void Boundary_surface_lsm<TF>::init_surface_layer(Input& input)
 
     obuk.resize(gd.ijcells);
     ustar.resize(gd.ijcells);
+    ra.resize(gd.ijcells);
 
     dudz_mo.resize(gd.ijcells);
     dvdz_mo.resize(gd.ijcells);
