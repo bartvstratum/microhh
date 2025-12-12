@@ -25,17 +25,17 @@
 
 #include <vector>
 #include <string>
+#include "field3d_operators.h"
+#include "field3d_io.h"
 
 class Master;
 class Input;
 class Netcdf_handle;
 template<typename> class Grid;
 template<typename> class Fields;
-template<typename> class Field3d_operators;
 template<typename> class Timedep;
 template<typename> class Stats;
 template<typename> class Thermo;
-template<typename> class Field3d_io;
 
 template<typename TF>
 class Canopy
@@ -48,7 +48,6 @@ class Canopy
         void create(Input&, Netcdf_handle&, Stats<TF>&);
         void exec();
 
-        // GPU functions and variables
         #ifdef USECUDA
         void prepare_device();
         void clear_device();
@@ -75,8 +74,8 @@ class Canopy
         std::vector<TF> padh;  // Plant area density (m2 m-2)
 
         #ifdef USECUDA
-        TF* pad_g;
-        TF* padh_g;
+        cuda_vector<TF> pad_g;
+        cuda_vector<TF> padh_g;
         #endif
 };
 #endif
