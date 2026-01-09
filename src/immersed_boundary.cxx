@@ -23,6 +23,8 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#include <fstream>
+#include <iomanip>
 
 #include <constants.h>
 #include "master.h"
@@ -121,25 +123,26 @@ namespace
         if (z[k] <= zdem)
         {
             // OLD METHOD:
-            //if (z[k+1] > zdem)
-            //    return true;
+            if (z[k+1] > zdem)
+                return true;
 
-            //for (int dj = -1; dj <= 1; ++dj)
-            //{
-            //    const TF zdem = interp2_dem(x[i], y[j+dj], x, y, dem, dx, dy,
-            //                                icells, mpi_offset_x, mpi_offset_y);
-            //    if (z[k] > zdem)
-            //        return true;
-            //}
+            for (int dj = -1; dj <= 1; ++dj)
+            {
+                const TF zdem = interp2_dem(x[i], y[j+dj], x, y, dem, dx, dy,
+                                            icells, jcells, mpi_offset_x, mpi_offset_y);
 
-            //for (int di = -1; di <= 1; ++di)
-            //{
-            //    // Interpolate DEM to account for half-level locations x,y
-            //    const TF zdem = interp2_dem(x[i+di], y[j], x, y, dem, dx, dy,
-            //                                icells, mpi_offset_x, mpi_offset_y);
-            //    if (z[k] > zdem)
-            //        return true;
-            //}
+                if (z[k] > zdem)
+                    return true;
+            }
+
+            for (int di = -1; di <= 1; ++di)
+            {
+                // Interpolate DEM to account for half-level locations x,y
+                const TF zdem = interp2_dem(x[i+di], y[j], x, y, dem, dx, dy,
+                                            icells, jcells, mpi_offset_x, mpi_offset_y);
+                if (z[k] > zdem)
+                    return true;
+            }
 
             //// NEW METHOD
             //for (int dj = -1; dj <= 1; ++dj)
@@ -167,18 +170,18 @@ namespace
             //}
 
             // NEW METHOD
-            for (int dj = -1; dj <= 1; ++dj)
-                for (int di = -1; di <= 1; ++di)
-                {
-                    // Interpolate DEM to account for half-level locations x,y
-                    const TF zdem = interp2_dem(
-                            x[i+di], y[j+dj], x, y, dem, dx, dy,
-                            icells, jcells, mpi_offset_x, mpi_offset_y);
+            //for (int dj = -1; dj <= 1; ++dj)
+            //    for (int di = -1; di <= 1; ++di)
+            //    {
+            //        // Interpolate DEM to account for half-level locations x,y
+            //        const TF zdem = interp2_dem(
+            //                x[i+di], y[j+dj], x, y, dem, dx, dy,
+            //                icells, jcells, mpi_offset_x, mpi_offset_y);
 
-                    for (int dk = -1; dk <= 1; ++dk)
-                        if (z[k + dk] > zdem)
-                            return true;
-                }
+            //        for (int dk = -1; dk <= 1; ++dk)
+            //            if (z[k + dk] > zdem)
+            //                return true;
+            //    }
         }
 
         return false;
@@ -247,19 +250,19 @@ namespace
                     if (z[k+dk] > zd)
                     {
                         // Calculate distance to IB
-                        //TF xb, yb, zb;
-                        //find_nearest_location_wall(
-                        //        xb, yb, zb, x, y, dem, x[i+di], y[j+dj], z[k+dk],
-                        //        dx, dy, icells, jcells, mpi_offset_x, mpi_offset_y);
-                        //const TF dist = absolute_distance(xb, yb, zb, x[i+di], y[j+dj], z[k+dk]);
+                        TF xb, yb, zb;
+                        find_nearest_location_wall(
+                                xb, yb, zb, x, y, dem, x[i+di], y[j+dj], z[k+dk],
+                                dx, dy, icells, jcells, mpi_offset_x, mpi_offset_y);
+                        const TF dist = absolute_distance(xb, yb, zb, x[i+di], y[j+dj], z[k+dk]);
 
-                        //// Exclude if grid point is too close to the IB
-                        //if (dist > d_lim)
-                        //{
-                            const TF distance = absolute_distance(x[i], y[j], z[k], x[i+di], y[j+dj], z[k+dk]);
-                            Neighbour<TF> tmp_neighbour = {i+di, j+dj, k+dk, distance};
-                            neighbours.push_back(tmp_neighbour);
-                        //}
+                        // Exclude if grid point is too close to the IB
+                        if (dist > d_lim)
+                        {
+                          const TF distance = absolute_distance(x[i], y[j], z[k], x[i+di], y[j+dj], z[k+dk]);
+                          Neighbour<TF> tmp_neighbour = {i+di, j+dj, k+dk, distance};
+                          neighbours.push_back(tmp_neighbour);
+                        }
                     }
                 }
 
@@ -596,6 +599,87 @@ namespace
             }
     }
 
+
+    template<typename TF>
+    void dump_ghost_cells(
+            const Ghost_cells<TF>& ghost,
+            const std::vector<TF>& x, const std::vector<TF>& y, const std::vector<TF>& z,
+            const std::string& filename,
+            const int n_idw_points)
+    {
+        std::ofstream outfile(filename);
+        if (!outfile.is_open())
+        {
+            std::string error = "Failed to open file: " + filename;
+            throw std::runtime_error(error);
+        }
+
+        outfile << std::scientific << std::setprecision(16);
+
+        // Write header
+        outfile << "n,i,j,k,x,y,z,xb,yb,zb,xi,yi,zi,di";
+
+        // Add headers for interpolation point vectors (n_idw_points per ghost cell)
+        for (int ii = 0; ii < n_idw_points; ++ii)
+        {
+            outfile << ",ip_i_" << ii << ",ip_j_" << ii << ",ip_k_" << ii
+                    << ",ip_x_" << ii << ",ip_y_" << ii << ",ip_z_" << ii << ",ip_d_" << ii;
+        }
+
+        // Add headers for IDW coefficients
+        for (int ii = 0; ii < n_idw_points; ++ii)
+        {
+            outfile << ",c_idw_" << ii;
+        }
+
+        outfile << ",c_idw_sum" << std::endl;
+
+        // Write data for each ghost cell
+        for (int n = 0; n < ghost.nghost; ++n)
+        {
+            // Write basic ghost cell data
+            outfile << n << ","
+                    << ghost.i[n] << ","
+                    << ghost.j[n] << ","
+                    << ghost.k[n] << ","
+                    << x[ghost.i[n]] << ","
+                    << y[ghost.j[n]] << ","
+                    << z[ghost.k[n]] << ","
+                    << ghost.xb[n] << ","
+                    << ghost.yb[n] << ","
+                    << ghost.zb[n] << ","
+                    << ghost.xi[n] << ","
+                    << ghost.yi[n] << ","
+                    << ghost.zi[n] << ","
+                    << ghost.di[n];
+
+            // Write interpolation point data
+            for (int ii = 0; ii < n_idw_points; ++ii)
+            {
+                const int idx = n * n_idw_points + ii;
+                outfile << "," << ghost.ip_i[idx]
+                        << "," << ghost.ip_j[idx]
+                        << "," << ghost.ip_k[idx]
+                        << "," << x[ghost.ip_i[idx]]
+                        << "," << y[ghost.ip_j[idx]]
+                        << "," << z[ghost.ip_k[idx]]
+                        << "," << ghost.ip_d[idx];
+            }
+
+            // Write IDW coefficients
+            for (int ii = 0; ii < n_idw_points; ++ii)
+            {
+                const int idx = n * n_idw_points + ii;
+                outfile << "," << ghost.c_idw[idx];
+            }
+
+            // Write c_idw_sum
+            outfile << "," << ghost.c_idw_sum[n] << std::endl;
+        }
+
+        outfile.close();
+    }
+
 }
 
 template<typename TF>
@@ -841,6 +925,11 @@ void Immersed_boundary<TF>::create()
         print_statistics(ghost.at("v").i, std::string("v"), master);
         print_statistics(ghost.at("w").i, std::string("w"), master);
 
+        // Dump ghost cells to file
+        dump_ghost_cells(ghost.at("u"), gd.xh, gd.y, gd.z, "ghost_cells_u.txt", n_idw_points);
+        dump_ghost_cells(ghost.at("v"), gd.x, gd.yh, gd.z, "ghost_cells_v.txt", n_idw_points);
+        dump_ghost_cells(ghost.at("w"), gd.x, gd.y, gd.zh, "ghost_cells_w.txt", n_idw_points);
+
         // Momentum boundary condition
         ghost.at("u").mbot.resize(ghost.at("u").nghost);
         ghost.at("v").mbot.resize(ghost.at("v").nghost);
@@ -864,6 +953,9 @@ void Immersed_boundary<TF>::create()
                     mpi_offset_x, mpi_offset_y);
 
             print_statistics(ghost.at("s").i, std::string("s"), master);
+
+            // Dump ghost cells to file
+            dump_ghost_cells(ghost.at("s"), gd.x, gd.y, gd.z, "ghost_cells_s.txt", n_idw_points);
 
             // Read spatially varying boundary conditions (if necessary)
             for (auto& scalar : fields.sp)
