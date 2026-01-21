@@ -509,6 +509,7 @@ namespace
             const int kstart, const int kend,
             const int jj, const int kk)
     {
+        #pragma omp parallel for
         for (int k=kstart; k<kend; ++k)
             for (int j=jstart; j<jend; ++j)
                 #pragma ivdep
