@@ -120,26 +120,34 @@ namespace
 
         // Check if grid point is below IB. If so; check if
         // one of the neighbouring grid points is outside.
+
+        // NOTE: in 2nd order DNS, a grid point is only a ghost cells if the grid point
+        //       directly up, west, east, south, or north is outside the IB.
+        //       No need to check the diagonals (e.g. i+i, j+1) since these
+        //       are not used in advection or diffusion.
+        //       This might change with LES (e.g. calculation strain rate?).
+
         if (z[k] <= zdem)
         {
-            // OLD METHOD:
             if (z[k+1] > zdem)
                 return true;
 
-            for (int dj = -1; dj <= 1; ++dj)
+            for (int dj : {-1, 1})
             {
-                const TF zdem = interp2_dem(x[i], y[j+dj], x, y, dem, dx, dy,
-                                            icells, jcells, mpi_offset_x, mpi_offset_y);
+                const TF zdem = interp2_dem(
+                        x[i], y[j+dj],x, y, dem, dx, dy,
+                        icells, jcells, mpi_offset_x, mpi_offset_y);
 
                 if (z[k] > zdem)
                     return true;
             }
 
-            for (int di = -1; di <= 1; ++di)
+            for (int di : {-1, 1})
             {
-                // Interpolate DEM to account for half-level locations x,y
-                const TF zdem = interp2_dem(x[i+di], y[j], x, y, dem, dx, dy,
-                                            icells, jcells, mpi_offset_x, mpi_offset_y);
+                const TF zdem = interp2_dem(
+                        x[i+di], y[j], x, y, dem, dx, dy,
+                        icells, jcells, mpi_offset_x, mpi_offset_y);
+
                 if (z[k] > zdem)
                     return true;
             }
@@ -372,6 +380,7 @@ namespace
 
         ghost.di.resize(nghost);
 
+        #pragma omp parallel for
         for (int n=0; n<nghost; ++n)
         {
             // Indices ghost cell in 3D field
@@ -400,6 +409,7 @@ namespace
         ghost.ip_d .resize(nghost*n_idw);
         ghost.c_idw.resize(nghost*n_idw);
 
+        #pragma omp parallel for
         for (int n=0; n<nghost; ++n)
         {
             // Exclude interpolation points closer than `d_lim` to IB
@@ -417,6 +427,7 @@ namespace
         ghost.c_idw.resize(nghost*n_idw);
         ghost.c_idw_sum.resize(nghost);
 
+        #pragma omp parallel for
         for (int n=0; n<nghost; ++n)
         {
             precalculate_idw(
