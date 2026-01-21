@@ -3,18 +3,18 @@ npx=1
 npy=1
 
 [grid]
-itot=256
-jtot=1
-ktot=256
+itot=None
+jtot=None
+ktot=None
 
-xsize=0.1016
-ysize=0.0005
-zsize=0.05535324409445985
+xsize=None
+ysize=None
+zsize=None
 
 swspatialorder=2
 
 [advec]
-cflmax=1.0
+cflmax=1.2
 
 [diff]
 swdiff=2
@@ -36,10 +36,9 @@ stop=0.
 
 [IB]
 sw_immersed_boundary=dem
-n_idw_points=5
+n_idw_points=8
 sbcbot=dirichlet
 sbot=0.1
-sbot_spatial=b
 
 [fields]
 visc=1e-7
@@ -49,7 +48,7 @@ rndseed=1
 rndamp=0.0
 rndz=0.0
 
-slist=b
+slist=s
 
 [buffer]
 swbuffer=0
@@ -59,7 +58,7 @@ beta=2.
 
 [time]
 starttime=0.
-endtime=100
+endtime=1200
 adaptivestep=true
 dtmax=20.
 savetime=5
@@ -76,5 +75,5 @@ masklist=ib
 swcross=1
 sampletime=5
 xz=0
-xy=0.003,0.005,0.007
-crosslist=u,v,w,p,b,b_fluxbot_ib
+yz=None
+crosslist=u,v,w,p,s
