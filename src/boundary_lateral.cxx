@@ -975,183 +975,139 @@ void Boundary_lateral<TF>::read_lbc(
         fclose(pFile);
     };
 
-    auto copy_boundary = [&](
-            std::vector<TF>& fld_out,
-            const std::vector<TF>& fld_in,
-            const int isize_in, const int jsize_in,
-            const int isize_out, const int jsize_out,
-            const int istart_in, const int jstart_in,
-            const std::string& name, const std::string& loc)
-    {
-        // Copy LBC data from vector `fld_in`, which holds an entire
-        // domain edge with data for all MPI tasks, to the `Lbc_map`
-        // containing only data needed for the current MPI subdomain.
-
-        const int size_in = gd.ktot * jsize_in * isize_in;
-        const int size_out = gd.kcells * jsize_out * isize_out;
-
-        const int jstride_in = isize_in;
-        const int kstride_in = jstride_in * jsize_in;
-
-        const int jstride_out = isize_out;
-        const int kstride_out = jstride_out * jsize_out;
-
-        for (int k=0; k<gd.ktot; k++)
-            for (int j=0; j<jsize_out; j++)
-                for (int i=0; i<isize_out; i++)
-                {
-                    const int ijk_in = i+istart_in + (j+jstart_in)*jstride_in + k*kstride_in;
-                    const int ijk_out = i + j*jstride_out + (k+gd.kstart)*kstride_out;
-
-                    fld_out[ijk_out] = fld_in[ijk_in];
-                }
-    };
-
-
     auto copy_boundaries = [&](const std::string& name)
     {
-        // Read LBC data from binary files, and copy out the
-        // part needed on the current MPI subdomain.
+        // Read LBC data from binary files. A single rank reads
+        // each edge and scatters to edge tasks using MPI subarrays.
 
         // `u` at west boundary and `v` at south boundary also contain
         // `u` at `istart` and `v` at `jstart`, and are therefore larger.
         const int igc_pad = (name == "u") ? gd.igc+1 : gd.igc;
         const int jgc_pad = (name == "v") ? gd.jgc+1 : gd.jgc;
 
-        // Number of ghost + sponge cells.
-        const int nlbc_w = igc_pad + n_sponge;
-        const int nlbc_e = gd.igc + n_sponge;
-        const int nlbc_s = jgc_pad + n_sponge;
-        const int nlbc_n = gd.jgc + n_sponge;
-
-        const int ncells_w = gd.ktot * (gd.jtot+2*gd.jgc) * nlbc_w;
-        const int ncells_e = gd.ktot * (gd.jtot+2*gd.jgc) * nlbc_e;
-        const int ncells_s = gd.ktot * nlbc_s * (gd.itot+2*gd.igc);
-        const int ncells_n = gd.ktot * nlbc_n * (gd.itot+2*gd.igc);
-
-        // Arrays which hold data for the full domain edge,
-        // i.e. for all MPI tasks. The `copy_boundary()` function
-        // later copies out the local data needed on each MPI subdomain.
-        std::vector<TF> lbc_w_full;
-        std::vector<TF> lbc_e_full;
-        std::vector<TF> lbc_s_full;
-        std::vector<TF> lbc_n_full;
-
-        if (md.mpicoordx == 0)
-            lbc_w_full.resize(ncells_w);
-        if (md.mpicoordx == md.npx-1)
-            lbc_e_full.resize(ncells_e);
-        if (md.mpicoordy == 0)
-            lbc_s_full.resize(ncells_s);
-        if (md.mpicoordy == md.npy-1)
-            lbc_n_full.resize(ncells_n);
-
-
-        if (md.mpicoordx == 0)
+        auto calc_divergence = [&](const Lbc_location loc, const TF* data)
         {
-            if (md.mpicoordy == 0)
-                read_binary(lbc_w_full, "lbc_" + name + "_west", ncells_w);
-            master.broadcast_y(lbc_w_full.data(), ncells_w, 0);
-
-            copy_boundary(
-                    lbc_w_in.at(name), lbc_w_full,
-                    nlbc_w, gd.jtot+2*gd.jgc,
-                    nlbc_w, gd.jcells,
-                    0, md.mpicoordy*gd.jmax,
-                    name, "west");
-
-            // Calculate total inflow over west boundary.
-            if (name == "u" && md.mpicoordy == 0)
+            if (loc == Lbc_location::West && name == "u")
                 calc_div_x<TF, Lbc_location::West>(
-                        div_u,
-                        lbc_w_full.data(),
-                        fields.rhoref.data(),
-                        gd.dz.data(),
-                        gd.dy,
-                        n_sponge,
-                        gd.igc, gd.kgc,
+                        div_u, data,
+                        fields.rhoref.data(), gd.dz.data(), gd.dy,
+                        n_sponge, gd.igc, gd.kgc,
                         gd.jgc, gd.jtot+gd.jgc,
                         gd.ktot, gd.jtot+(2*gd.jgc));
-        }
-
-        if (md.mpicoordx == md.npx-1)
-        {
-            if (md.mpicoordy == md.npy-1)
-                read_binary(lbc_e_full, "lbc_" + name + "_east", ncells_e);
-            master.broadcast_y(lbc_e_full.data(), ncells_e, md.npy-1);
-
-            copy_boundary(
-                    lbc_e_in.at(name), lbc_e_full,
-                    nlbc_e, gd.jtot+2*gd.jgc,
-                    nlbc_e, gd.jcells,
-                    0, md.mpicoordy*gd.jmax,
-                    name, "east");
-
-            // Calculate total outflow over east boundary.
-            if (name == "u" && md.mpicoordy == md.npy-1)
+            else if (loc == Lbc_location::East && name == "u")
                 calc_div_x<TF, Lbc_location::East>(
-                        div_u,
-                        lbc_e_full.data(),
-                        fields.rhoref.data(),
-                        gd.dz.data(),
-                        gd.dy,
-                        n_sponge,
-                        gd.igc, gd.kgc,
+                        div_u, data,
+                        fields.rhoref.data(), gd.dz.data(), gd.dy,
+                        n_sponge, gd.igc, gd.kgc,
                         gd.jgc, gd.jtot+gd.jgc,
                         gd.ktot, gd.jtot+(2*gd.jgc));
-	    }
-
-        if (md.mpicoordy == 0)
-	    {
-            if (md.mpicoordx == md.npx-1)
-                read_binary(lbc_s_full, "lbc_" + name + "_south", ncells_s);
-            master.broadcast_x(lbc_s_full.data(), ncells_s, md.npx-1);
-
-            copy_boundary(
-                    lbc_s_in.at(name), lbc_s_full,
-                    gd.itot+2*gd.igc, nlbc_s,
-                    gd.icells, nlbc_s,
-                    md.mpicoordx*gd.imax, 0,
-                    name, "south");
-
-            if (name == "v" && md.mpicoordx == md.npx-1)
+            else if (loc == Lbc_location::South && name == "v")
                 calc_div_y<TF, Lbc_location::South>(
-                        div_v,
-                        lbc_s_full.data(),
-                        fields.rhoref.data(),
-                        gd.dz.data(),
-                        gd.dx,
-                        n_sponge,
-                        gd.jgc, gd.kgc,
+                        div_v, data,
+                        fields.rhoref.data(), gd.dz.data(), gd.dx,
+                        n_sponge, gd.jgc, gd.kgc,
                         gd.igc, gd.itot+gd.igc,
                         gd.ktot, gd.itot+(2*gd.igc));
-	    }
-
-        if (md.mpicoordy == md.npy-1)
-	    {
-            if (md.mpicoordx == 0)
-                read_binary(lbc_n_full, "lbc_" + name + "_north", ncells_n);
-            master.broadcast_x(lbc_n_full.data(), ncells_n, 0);
-
-            copy_boundary(
-                    lbc_n_in.at(name), lbc_n_full,
-                    gd.itot+2*gd.igc, nlbc_n,
-                    gd.icells, nlbc_n,
-                    md.mpicoordx*gd.imax, 0,
-                    name, "north");
-
-            if (name == "v" && md.mpicoordx == 0)
+            else if (loc == Lbc_location::North && name == "v")
                 calc_div_y<TF, Lbc_location::North>(
-                        div_v,
-                        lbc_n_full.data(),
-                        fields.rhoref.data(),
-                        gd.dz.data(),
-                        gd.dx,
-                        n_sponge,
-                        gd.jgc, gd.kgc,
+                        div_v, data,
+                        fields.rhoref.data(), gd.dz.data(), gd.dx,
+                        n_sponge, gd.jgc, gd.kgc,
                         gd.igc, gd.itot+gd.igc,
                         gd.ktot, gd.itot+(2*gd.igc));
-	    }
+        };
+
+        const std::map<Lbc_location, std::string> edge_names =
+        {
+            {Lbc_location::West, "west"}, {Lbc_location::East, "east"},
+            {Lbc_location::South, "south"}, {Lbc_location::North, "north"}
+        };
+
+        const std::map<Lbc_location, Lbc_map<TF>*> lbc_maps =
+        {
+            {Lbc_location::West, &lbc_w_in}, {Lbc_location::East, &lbc_e_in},
+            {Lbc_location::South, &lbc_s_in}, {Lbc_location::North, &lbc_n_in}
+        };
+
+        // Each edge is a 3D field (ktot, nj, ni) stored in a 1D vector.
+        // West/East are split along j (commy), South/North along i (commx).
+        for (const auto loc : {Lbc_location::West, Lbc_location::East,
+                               Lbc_location::South, Lbc_location::North})
+        {
+            const bool we = (loc == Lbc_location::West || loc == Lbc_location::East);
+
+            const bool on_edge = we
+                    ? (loc == Lbc_location::West ? md.mpicoordx == 0 : md.mpicoordx == md.npx-1)
+                    : (loc == Lbc_location::South ? md.mpicoordy == 0 : md.mpicoordy == md.npy-1);
+
+            if (!on_edge)
+                continue;
+
+            const int nlbc = we
+                    ? (loc == Lbc_location::West ? igc_pad + n_sponge : gd.igc + n_sponge)
+                    : (loc == Lbc_location::South ? jgc_pad + n_sponge : gd.jgc + n_sponge);
+
+            const int nj_glob = we ? gd.jtot + 2*gd.jgc : nlbc;
+            const int ni_glob = we ? nlbc : gd.itot + 2*gd.igc;
+            const int nj_loc  = we ? gd.jcells : nlbc;
+            const int ni_loc  = we ? nlbc : gd.icells;
+
+            const int ncells = gd.ktot * nj_glob * ni_glob;
+            const int count  = gd.ktot * nj_loc * ni_loc;
+            TF* recv_ptr = &lbc_maps.at(loc)->at(name)[gd.kstart * nj_loc * ni_loc];
+
+            #ifdef USEMPI
+            MPI_Comm comm    = we ? md.commy : md.commx;
+            const int root   = we ? (loc == Lbc_location::West ? 0 : md.npy-1) : (loc == Lbc_location::South ? md.npx-1 : 0);
+            const int nranks = we ? md.npy : md.npx;
+            const bool is_root = we ? md.mpicoordy == root : md.mpicoordx == root;
+
+            const int stride_j = we ? gd.jmax : 0;
+            const int stride_i = we ? 0 : gd.imax;
+
+            if (is_root)
+            {
+                std::vector<TF> full(ncells);
+                read_binary(full, "lbc_" + name + "_" + edge_names.at(loc), ncells);
+
+                calc_divergence(loc, full.data());
+
+                for (int r = 0; r < nranks; ++r)
+                {
+                    int tot_size[3]  = {gd.ktot, nj_glob, ni_glob};
+                    int sub_size[3]  = {gd.ktot, nj_loc, ni_loc};
+                    int sub_start[3] = {0, r * stride_j, r * stride_i};
+
+                    MPI_Datatype subarray;
+                    MPI_Type_create_subarray(3, tot_size, sub_size, sub_start,
+                            MPI_ORDER_C, mpi_fp_type<TF>(), &subarray);
+                    MPI_Type_commit(&subarray);
+
+                    if (r == root)
+                        MPI_Sendrecv(
+                                full.data(), 1, subarray, root, 0,
+                                recv_ptr, count, mpi_fp_type<TF>(), root, 0,
+                                comm, MPI_STATUS_IGNORE);
+                    else
+                        MPI_Send(full.data(), 1, subarray, r, 0, comm);
+
+                    MPI_Type_free(&subarray);
+                }
+            }
+            else
+            {
+                MPI_Recv(recv_ptr, count, mpi_fp_type<TF>(),
+                        root, 0, comm, MPI_STATUS_IGNORE);
+            }
+            #else
+            {
+                std::vector<TF> full(ncells);
+                read_binary(full, "lbc_" + name + "_" + edge_names.at(loc), ncells);
+                std::copy(full.begin(), full.end(), recv_ptr);
+                calc_divergence(loc, full.data());
+            }
+            #endif
+        }
     };
 
     if (sw_openbc_uv)
