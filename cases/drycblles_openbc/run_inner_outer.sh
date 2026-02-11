@@ -1,8 +1,13 @@
+# Work directories.
+mkdir -p inner
+mkdir -p outer
+
+# Cleanup.
 rm inner/*
 rm outer/*
+rm *00*
 
 # Outer domain.
-rm *00*
 python drycblles_input.py outer
 mpiexec -n 8 ./microhh init drycblles
 mpiexec -n 8 ./microhh run drycblles

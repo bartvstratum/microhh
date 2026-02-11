@@ -6,13 +6,11 @@ import microhh_tools as mht
 
 # Case settings.
 domain = sys.argv[1]    # 'inner' or 'outer'
-dtype = np.float64
-
 
 """
 Time.
 """
-endtime = 3600
+endtime = 7200
 lbc_freq = 30
 
 
@@ -79,12 +77,12 @@ Write case_input.nc
 nc_file = nc.Dataset("drycblles_input.nc", mode="w", datamodel="NETCDF4", clobber=True)
 
 nc_file.createDimension("z", z.size)
-nc_z  = nc_file.createVariable("z" , dtype, ("z"))
+nc_z  = nc_file.createVariable("z" , np.float64, ("z"))
 
 nc_group_init = nc_file.createGroup("init");
-nc_u  = nc_group_init.createVariable("u" , dtype, ("z"))
-nc_v  = nc_group_init.createVariable("v" , dtype, ("z"))
-nc_th = nc_group_init.createVariable("th", dtype, ("z"))
+nc_u  = nc_group_init.createVariable("u" , np.float64, ("z"))
+nc_v  = nc_group_init.createVariable("v" , np.float64, ("z"))
+nc_th = nc_group_init.createVariable("th", np.float64, ("z"))
 
 nc_z [:] = z [:]
 nc_u [:] = u [:] + 1
