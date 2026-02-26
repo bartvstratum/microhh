@@ -60,6 +60,13 @@ void Fun(
   double P_N2O5, L_N2O5;
   int i_qssa;
 
+  // Reset QSSA input. Otherwise this causes a race condition in vectorised or GPU code.
+  F[7] = 0.0;
+  F[6] = 0.0;
+  F[5] = 0.0;
+  F[4] = 0.0;
+  F[3] = 0.0;
+
   // =========================================================================
   // QSSA Iteration: Solve P = L * F for OH, HO2, RO2, NO3, N2O5
   // =========================================================================
