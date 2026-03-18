@@ -424,7 +424,7 @@ void Model<TF>::exec()
                 source->exec(*timeloop);
 
                 // Gravitational settling of binned dust types.
-                particle_bin->exec(*stats);
+                particle_bin->exec(*boundary, *stats);
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);

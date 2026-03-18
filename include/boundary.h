@@ -111,6 +111,7 @@ class Boundary
         virtual const std::vector<TF>& get_dudz() const;
         virtual const std::vector<TF>& get_dvdz() const;
         virtual const std::vector<TF>& get_dbdz() const;
+        virtual const std::vector<TF>& get_ustar() const;
 
         std::string get_switch();
 

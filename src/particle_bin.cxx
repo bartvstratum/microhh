@@ -31,6 +31,7 @@
 #include "netcdf_interface.h"
 #include "timeloop.h"
 #include "constants.h"
+#include "boundary.h"
 
 #include "particle_bin.h"
 
@@ -171,13 +172,14 @@ unsigned long Particle_bin<TF>::get_time_limit()
 
 #ifndef USECUDA
 template<typename TF>
-void Particle_bin<TF>::exec(Stats<TF>& stats)
+void Particle_bin<TF>::exec(Boundary<TF>& boundary, Stats<TF>& stats)
 {
     if (!sw_particle)
         return;
 
     auto& gd = grid.get_grid_data();
 
+    // Gravitational settling of particles.
     for (auto& w : w_particle)
         settle_particles<TF>(
                 fields.st.at(w.first)->fld.data(),
@@ -188,6 +190,10 @@ void Particle_bin<TF>::exec(Stats<TF>& stats)
                 gd.jstart, gd.jend,
                 gd.kstart, gd.kend,
                 gd.icells, gd.ijcells);
+
+    // Surface emissions.
+    const std::vector<TF>& ustar = boundary.get_ustar();
+
 }
 #endif
 

@@ -30,6 +30,7 @@ template<typename> class Grid;
 template<typename> class Fields;
 template<typename> class Stats;
 template<typename> class Timeloop;
+template<typename> class Boundary;
 
 template<typename TF>
 class Particle_bin
@@ -40,7 +41,7 @@ class Particle_bin
 
         void init(Netcdf_handle&);
         void create(Timeloop<TF>&, Netcdf_handle&);
-        void exec(Stats<TF>&);
+        void exec(Boundary<TF>&, Stats<TF>&);
         unsigned long get_time_limit();
 
     private:
