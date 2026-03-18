@@ -134,4 +134,22 @@ for scalar, prof in scalars.items():
     add_var(scalar, ('z'), prof, nc_init)
     add_var('{}_inflow'.format(scalar), ('z'), prof, nc_init)
 
+
+"""
+Add dummy 2D array as example.
+"""
+dim_x = 4
+dim_y = 6
+table = np.zeros((dim_y, dim_x), dtype=float_type)
+
+for j in range(dim_y):
+    for i in range(dim_x):
+        table[j,i] = i + j*dim_x
+        print(f'i={i}, j={j}, table={table[j,i]:.0f}')
+
+nc_table = nc_file.createGroup('particle_bin');
+nc_table.createDimension('dim_x', dim_x)
+nc_table.createDimension('dim_y', dim_y)
+add_var('table', ('dim_y', 'dim_x'), table, nc_table)
+
 nc_file.close()

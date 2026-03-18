@@ -28,6 +28,7 @@
 #include "grid.h"
 #include "fields.h"
 #include "constants.h"
+#include "netcdf_interface.h"
 #include "timeloop.h"
 #include "constants.h"
 
@@ -89,13 +90,34 @@ Particle_bin<TF>::~Particle_bin()
 }
 
 template<typename TF>
-void Particle_bin<TF>::create(Timeloop<TF>& timeloop)
+void Particle_bin<TF>::init(Netcdf_handle& input_nc)
+{
+    if (!sw_particle)
+        return;
+
+    // Get dimensions lookup table and resize.
+    if (input_nc.group_exists(("particle_bin")))
+    {
+        Netcdf_handle& nc_group = input_nc.get_group("particle_bin");
+
+        if (nc_group.dimension_exists("dim_x"))
+            dim_x = nc_group.get_dimension_size("dim_x");
+        if (nc_group.dimension_exists("dim_y"))
+            dim_y = nc_group.get_dimension_size("dim_y");
+
+        master.print_message("Particle_bin lookup table shape: (%d, %d)\n", dim_x, dim_y);
+    }
+}
+
+template<typename TF>
+void Particle_bin<TF>::create(Timeloop<TF>& timeloop, Netcdf_handle& input_nc)
 {
     if (!sw_particle)
         return;
 
     auto& gd = grid.get_grid_data();
 
+    // Calculate fixed maximum time step.
     // Find minimum vertical grid spacing.
     TF dz_min = TF(Constants::dbig);
     for (int k=gd.kstart; k<gd.kend; ++k)
@@ -110,6 +132,32 @@ void Particle_bin<TF>::create(Timeloop<TF>& timeloop)
     const double dt_max = cfl_max / w_max * dz_min;
 
     idt_max = convert_to_itime(dt_max);
+
+    // Allocate and read lookup table from input NetCDF.
+    if (dim_x * dim_y > 0)
+    {
+        table.resize(dim_x*dim_y);
+
+        const std::vector<int> start = {0,0};
+        const std::vector<int> count = {dim_y, dim_x};
+
+        Netcdf_group& nc_group = input_nc.get_group("particle_bin");
+
+        if (nc_group.variable_exists("table"))
+            nc_group.get_variable(table, "table", start, count);
+        else
+            throw std::runtime_error("Particle_bin lookup table \"table\" missing in NetCDF input!");
+
+        // Debug...
+        for (int j=0; j<dim_y; j++)
+            for (int i=0; i<dim_x; i++)
+            {
+                const int ij = i + j*dim_x;
+                master.print_message("Table: i=%d, j=%d, value=%f\n", i, j, table[ij]);
+            }
+    }
+    else
+        master.print_warning("Particle_bin lookup table has zero size!\n");
 }
 
 template<typename TF>

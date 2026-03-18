@@ -25,6 +25,7 @@
 
 class Master;
 class Input;
+class Netcdf_handle;
 template<typename> class Grid;
 template<typename> class Fields;
 template<typename> class Stats;
@@ -37,8 +38,9 @@ class Particle_bin
         Particle_bin(Master&, Grid<TF>&, Fields<TF>&, Input&);
         ~Particle_bin();
 
+        void init(Netcdf_handle&);
+        void create(Timeloop<TF>&, Netcdf_handle&);
         void exec(Stats<TF>&);
-        void create(Timeloop<TF>&);
         unsigned long get_time_limit();
 
     private:
@@ -52,5 +54,10 @@ class Particle_bin
 
         // Gravitational settling velocities, negative downward.
         std::map<std::string, TF> w_particle;
+
+        // 2D lookup table.
+        int dim_x=0;
+        int dim_y=0;
+        std::vector<TF> table;
 };
 #endif

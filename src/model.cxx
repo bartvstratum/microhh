@@ -206,6 +206,7 @@ void Model<TF>::init()
     source->init();
     aerosol->init();
     background->init(*input_nc);
+    particle_bin->init(*input_nc);
 
     stats->init();
     column->init();
@@ -270,7 +271,7 @@ void Model<TF>::load()
     buffer->create(*input, *input_nc, *stats);
     force->create(*input, *input_nc, *stats);
     source->create(*input, *input_nc);
-    particle_bin->create(*timeloop);
+    particle_bin->create(*timeloop, *input_nc);
     aerosol->create(*input, *input_nc, *stats);
     background->create(*input, *input_nc, *stats);
 
