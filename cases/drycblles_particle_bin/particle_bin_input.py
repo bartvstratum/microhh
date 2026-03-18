@@ -25,6 +25,8 @@ dx = xsize / itot
 dy = ysize / jtot
 dz = zsize / ktot
 
+use_prescribed_emissions = False
+
 
 """
 Define vertical grid and input profiles.
@@ -63,19 +65,24 @@ particle_diameter = 0.5*(particle_bins[1:] + particle_bins[:-1]) * 1e-6
 tau_p = particle_diameter**2 * rho_p / (18 * nu * rho_a)
 w_terminal = -tau_p * g
 
-# Create circular field with dust emissions.
+
 x0 = 0.15 * xsize
 y0 = 0.5 * ysize
-r = 750
 
-Y, X = np.meshgrid(y, x, indexing='ij')
-D = np.sqrt((X - x0)**2 + (Y - y0)**2)
-field_mask = D < r
+if use_prescribed_emissions:
+    """
+    Create circular field with prescribed dust emissions.
+    """
+    r = 750
 
-field_flux = np.zeros((jtot, itot), dtype=float_type)
-field_flux[field_mask] = 1.
-for scalar in particle_list:
-    field_flux.tofile('{}_bot_in.0000000'.format(scalar))
+    Y, X = np.meshgrid(y, x, indexing='ij')
+    D = np.sqrt((X - x0)**2 + (Y - y0)**2)
+    field_mask = D < r
+
+    field_flux = np.zeros((jtot, itot), dtype=float_type)
+    field_flux[field_mask] = 1.
+    for scalar in particle_list:
+        field_flux.tofile('{}_bot_in.0000000'.format(scalar))
 
 
 """
@@ -99,14 +106,19 @@ ini['fields']['slist'] = particle_list
 ini['advec']['fluxlimit_list'] = particle_list
 ini['limiter']['limitlist'] = particle_list
 ini['boundary']['scalar_outflow'] = particle_list
-ini['boundary']['sbot_2d_list'] = particle_list
+if use_prescribed_emissions:
+    ini['boundary']['sbot_2d_list'] = particle_list
 
 ini['particle_bin']['particle_list'] = particle_list
+ini['particle_bin']['w_particle'] = 0
 for i in range(len(particle_list)):
     ini['particle_bin'][f'w_particle[{particle_list[i]}]'] = w_terminal[i]
 
 # Statistics/crosses/...
-scalar_crosses = particle_list + [s+'_path' for s in particle_list]
+scalar_crosses = particle_list.copy()
+scalar_crosses += [s+'_path' for s in particle_list]
+scalar_crosses += [s+'_fluxbot' for s in particle_list]
+
 ini['cross']['crosslist'] = scalar_crosses + ['th', 'u', 'v', 'w']
 ini['cross']['xz'] = y0
 ini['cross']['yz'] = x0

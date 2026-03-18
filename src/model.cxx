@@ -394,6 +394,10 @@ void Model<TF>::exec()
                 // Calculate the radiation fluxes and the related heating rate.
                 radiation->exec(*thermo, timeloop->get_time(), *timeloop, *stats, *aerosol, *background, *microphys);
 
+                // Gravitational settling and surface emissions of binned dust scalars.
+                // This class (optionally) sets `fld->fluxbot`, so keep it before `boundary->exec()`.
+                particle_bin->exec(*boundary, *stats);
+
                 // Calculate Monin-Obukhov parameters (L, u*), and calculate
                 // surface fluxes, gradients, ...
                 boundary->exec(*thermo, *radiation, *microphys, *timeloop);
@@ -422,9 +426,6 @@ void Model<TF>::exec()
 
                 // Add point and line sources of scalars.
                 source->exec(*timeloop);
-
-                // Gravitational settling of binned dust types.
-                particle_bin->exec(*boundary, *stats);
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);

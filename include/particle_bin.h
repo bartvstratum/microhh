@@ -50,6 +50,7 @@ class Particle_bin
         Fields<TF>& fields;
 
         bool sw_particle;
+        std::vector<std::string> particle_list;
         TF cfl_max;
         unsigned long idt_max;
 

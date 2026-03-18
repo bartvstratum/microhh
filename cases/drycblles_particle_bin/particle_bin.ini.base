@@ -48,7 +48,7 @@ stop[th]=0.003
 z0m=0.1
 z0h=0.1
 
-sbot_2d_list=None
+#sbot_2d_list=None
 
 scalar_outflow=None
 swtimedep_outflow=False

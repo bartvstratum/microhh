@@ -57,6 +57,24 @@ namespace
                     st[ijk] -= w_particle * (s[ijk+kstride]-s[ijk])*dzhi[k+1];
                 }
     }
+
+
+    template<typename TF>
+    void calc_dust_emission(
+            TF* const restrict flux_bot,
+            const TF* const restrict ustar,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int jstride)
+    {
+        for (int j=jstart; j<jend; ++j)
+            for (int i=istart; i<iend; ++i)
+            {
+                const int ij = i + j*jstride;
+
+                flux_bot[ij] = ustar[ij];
+            }
+    }
 }
 
 
@@ -68,10 +86,10 @@ Particle_bin<TF>::Particle_bin(Master& masterin, Grid<TF>& gridin, Fields<TF>& f
 
     if (sw_particle)
     {
-        std::vector<std::string> scalars = inputin.get_list<std::string>("particle_bin", "particle_list", "", std::vector<std::string>());
+        particle_list = inputin.get_list<std::string>("particle_bin", "particle_list", "", std::vector<std::string>());
 
         // Read gravitational settling velocities.
-        for (auto& scalar : scalars)
+        for (auto& scalar : particle_list)
         {
             w_particle.emplace(scalar, inputin.get_item<TF>("particle_bin", "w_particle", scalar));
 
@@ -85,10 +103,12 @@ Particle_bin<TF>::Particle_bin(Master& masterin, Grid<TF>& gridin, Fields<TF>& f
     }
 }
 
+
 template<typename TF>
 Particle_bin<TF>::~Particle_bin()
 {
 }
+
 
 template<typename TF>
 void Particle_bin<TF>::init(Netcdf_handle& input_nc)
@@ -109,6 +129,7 @@ void Particle_bin<TF>::init(Netcdf_handle& input_nc)
         master.print_message("Particle_bin lookup table shape: (%d, %d)\n", dim_x, dim_y);
     }
 }
+
 
 template<typename TF>
 void Particle_bin<TF>::create(Timeloop<TF>& timeloop, Netcdf_handle& input_nc)
@@ -133,6 +154,7 @@ void Particle_bin<TF>::create(Timeloop<TF>& timeloop, Netcdf_handle& input_nc)
     const double dt_max = cfl_max / w_max * dz_min;
 
     idt_max = convert_to_itime(dt_max);
+
 
     // Allocate and read lookup table from input NetCDF.
     if (dim_x * dim_y > 0)
@@ -161,6 +183,7 @@ void Particle_bin<TF>::create(Timeloop<TF>& timeloop, Netcdf_handle& input_nc)
         master.print_warning("Particle_bin lookup table has zero size!\n");
 }
 
+
 template<typename TF>
 unsigned long Particle_bin<TF>::get_time_limit()
 {
@@ -169,6 +192,7 @@ unsigned long Particle_bin<TF>::get_time_limit()
 
     return idt_max;
 }
+
 
 #ifndef USECUDA
 template<typename TF>
@@ -194,6 +218,15 @@ void Particle_bin<TF>::exec(Boundary<TF>& boundary, Stats<TF>& stats)
     // Surface emissions.
     const std::vector<TF>& ustar = boundary.get_ustar();
 
+    for (auto& scalar : particle_list)
+    {
+        calc_dust_emission(
+            fields.sp.at(scalar)->flux_bot.data(),
+            ustar.data(),
+            gd.istart, gd.iend,
+            gd.jstart, gd.jend,
+            gd.icells);
+    }
 }
 #endif
 
