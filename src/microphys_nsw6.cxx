@@ -193,9 +193,11 @@ namespace
                 {
                     const int ijk = i + j*jj + k*kk;
 
-                    // Compute the T out of the known values of ql and qi, this saves memory and sat_adjust.
-                    const TF T = exner[k]*thl[ijk] + Lv<TF>/cp<TF>*ql[ijk] + Ls<TF>/cp<TF>*qi[ijk];
-                    const TF qv = qt[ijk] - ql[ijk] - qi[ijk];
+                    // Compute T and qv from satadjust. thlE is not linear in T, so T cannot be
+                    // reconstructed from thl, ql and qi with T = exner*thl + Lv/cp*ql + Ls/cp*qi (thlD).
+                    const Struct_sat_adjust<TF> ssa = sat_adjust(thl[ijk], qt[ijk], p[k], exner[k]);
+                    const TF T = ssa.t;
+                    const TF qv = std::min(ssa.qs, qt[ijk]);
 
                     // Flag the sign of the absolute temperature.
                     const TF T_pos = TF(T >= T0<TF>);
@@ -601,70 +603,107 @@ namespace
                             + vapor_to_snow + vapor_to_graupel
                             - snow_to_rain - graupel_to_rain - snow_to_vapor - graupel_to_vapor;
 
-                    // loss from vapor
-                    qtt[ijk] -= vapor_to_snow;
-                    qst[ijk] += vapor_to_snow;
-                    thlt[ijk] += Ls<TF> / (cp<TF> * exner[k]) * vapor_to_snow;
+                    /* Conversion of the process rates to thl and qt tendencies (thlE).
+                     * thlE is not linear in T, ql and qi, so the thl tendency cannot be summed per process
+                     * (thlD: thlt += L/(cp*exner) * rate). Instead:
+                     *   1. accumulate the changes in cloud liquid (dqc), cloud ice (dqi) and vapor (dqv),
+                     *   2. compute the latent heating dT of all phase changes at constant cp,
+                     *   3. saturation adjust the end state (T_end, qt_end) in absolute temperature,
+                     *   4. convert T_end, qc_end, qi_end to thl_end with thlE, and
+                     *   5. thlt += (thl_end - thl) / dt and qtt += dqc + dqi + dqv.
+                     * Precipitation (qr, qs, qg) is not part of thl or qt; their tendencies are added directly.
+                     */
+                    TF dqc = 0;
+                    TF dqi = 0;
+                    TF dqv = 0;
 
-                    qtt[ijk] -= vapor_to_graupel;
+                    // loss from vapor
+                    dqv -= vapor_to_snow;
+                    qst[ijk] += vapor_to_snow;
+
+                    dqv -= vapor_to_graupel;
                     qgt[ijk] += vapor_to_graupel;
-                    thlt[ijk] += Ls<TF> / (cp<TF> * exner[k]) * vapor_to_graupel;
 
                     // Loss from cloud.
-                    qtt[ijk] -= cloud_to_rain;
+                    dqc -= cloud_to_rain;
                     qrt[ijk] += cloud_to_rain;
-                    thlt[ijk] += Lv<TF> / (cp<TF> * exner[k]) * cloud_to_rain;
 
-                    qtt[ijk] -= cloud_to_graupel;
+                    dqc -= cloud_to_graupel;
                     qgt[ijk] += cloud_to_graupel;
-                    thlt[ijk] += Ls<TF> / (cp<TF> * exner[k]) * cloud_to_graupel;
 
-                    qtt[ijk] -= cloud_to_snow;
+                    dqc -= cloud_to_snow;
                     qst[ijk] += cloud_to_snow;
-                    thlt[ijk] += Ls<TF> / (cp<TF> * exner[k]) * cloud_to_snow;
 
                     // Loss from rain.
                     qrt[ijk] -= rain_to_vapor;
-                    qtt[ijk] += rain_to_vapor;
-                    thlt[ijk] -= Lv<TF> / (cp<TF> * exner[k]) * rain_to_vapor;
+                    dqv += rain_to_vapor;
 
                     qrt[ijk] -= rain_to_graupel;
                     qgt[ijk] += rain_to_graupel;
-                    thlt[ijk] += Lf<TF> / (cp<TF> * exner[k]) * rain_to_graupel;
 
                     qrt[ijk] -= rain_to_snow;
                     qst[ijk] += rain_to_snow;
-                    thlt[ijk] += Lf<TF> / (cp<TF> * exner[k]) * rain_to_snow;
 
                     // Loss from ice.
-                    qtt[ijk] -= ice_to_snow;
+                    dqi -= ice_to_snow;
                     qst[ijk] += ice_to_snow;
-                    thlt[ijk] += Ls<TF> / (cp<TF> * exner[k]) * ice_to_snow;
 
-                    qtt[ijk] -= ice_to_graupel;
+                    dqi -= ice_to_graupel;
                     qgt[ijk] += ice_to_graupel;
-                    thlt[ijk] += Ls<TF> / (cp<TF> * exner[k]) * ice_to_graupel;
 
                     // Loss from snow.
                     qst[ijk] -= snow_to_graupel;
                     qgt[ijk] += snow_to_graupel;
 
                     qst[ijk] -= snow_to_vapor;
-                    qtt[ijk] += snow_to_vapor;
-                    thlt[ijk] -= Ls<TF> / (cp<TF> * exner[k]) * snow_to_vapor;
+                    dqv += snow_to_vapor;
 
                     qst[ijk] -= snow_to_rain;
                     qrt[ijk] += snow_to_rain;
-                    thlt[ijk] -= Lf<TF> / (cp<TF> * exner[k]) * snow_to_rain;
 
                     // Loss from graupel.
                     qgt[ijk] -= graupel_to_rain;
                     qrt[ijk] += graupel_to_rain;
-                    thlt[ijk] -= Lf<TF> / (cp<TF> * exner[k]) * graupel_to_rain;
 
                     qgt[ijk] -= graupel_to_vapor;
-                    qtt[ijk] += graupel_to_vapor;
-                    thlt[ijk] -= Ls<TF> / (cp<TF> * exner[k]) * graupel_to_vapor;
+                    dqv += graupel_to_vapor;
+
+                    // State after one time step of the microphysics, before saturation adjustment.
+                    TF qc_end = ql[ijk] + dqc * dt;
+                    TF qi_end = qi[ijk] + dqi * dt;
+                    TF qv_end = qv + dqv * dt;
+                    TF qt_end = qc_end + qi_end + qv_end;
+
+                    // Latent heating [K s-1] of all phase changes, with constant Lv/Ls/Lf and cp (consistent with thlE).
+                    // Transfers within one phase (cloud_to_rain, ice_to_snow, ...) do not change T.
+                    const TF dT =   - Lv<TF> / cp<TF> * rain_to_vapor
+                                    - Ls<TF> / cp<TF> * snow_to_vapor
+                                    - Ls<TF> / cp<TF> * graupel_to_vapor
+                                    + Lf<TF> / cp<TF> * cloud_to_snow
+                                    + Lf<TF> / cp<TF> * cloud_to_graupel
+                                    - Lf<TF> / cp<TF> * snow_to_rain
+                                    - Lf<TF> / cp<TF> * graupel_to_rain
+                                    + Lf<TF> / cp<TF> * rain_to_snow
+                                    + Lf<TF> / cp<TF> * rain_to_graupel
+                                    + Ls<TF> / cp<TF> * vapor_to_graupel
+                                    + Ls<TF> / cp<TF> * vapor_to_snow;
+
+                    TF T_end = T + dT * dt;
+
+                    // Saturation adjustment of the end state in absolute temperature.
+                    Struct_sat_adjust<TF> ssa_end = sat_adjust_absolute_T_ice<TF>(T_end, qt_end, p[k], qc_end, qv_end, qi_end, Lv<TF>, Ls<TF>, cp<TF>);
+                    T_end = ssa_end.t;
+                    qc_end = ssa_end.ql;
+                    qi_end = ssa_end.qi;
+
+                    // Convert the end state to thl: thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)).
+                    const TF thl_end = T_end/exner[k] / (1   + Lv<TF>*qc_end/(cp<TF> * T_end)
+                                                             + Ls<TF>*qi_end/(cp<TF> * T_end));
+
+                    // Tendencies of the conserved variables.
+                    TF dthl_from_dT = (thl_end - thl[ijk])/dt;
+                    qtt[ijk] += dqc + dqi + dqv;
+                    thlt[ijk] += dthl_from_dT;
                 }
         }
     }

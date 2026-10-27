@@ -546,6 +546,9 @@ Microphys_2mom_warm<TF>::Microphys_2mom_warm(Master& masterin, Grid<TF>& gridin,
     auto& gd = grid.get_grid_data();
     swmicrophys = Microphys_type::Warm_2mom;
 
+    // The thl tendencies in this scheme use the Betts formulation, which is inconsistent with thlE in thermo_moist.
+    throw std::runtime_error("swmicro=2mom_warm is inconsistent with the thlE formulation of thl in thermo_moist\n");
+
     // Read microphysics switches and settings
     swmicrobudget = inputin.get_item<bool>("micro", "swmicrobudget", "", false);
     cflmax = inputin.get_item<TF>("micro", "cflmax", "", 2.);

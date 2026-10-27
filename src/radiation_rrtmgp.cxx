@@ -476,8 +476,17 @@ namespace
     }
 
 
+    /* Radiative tendency of thl (thlE).
+     * thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)) is not linear in T, so dthl != dT/exner (thlD).
+     * Instead: compute the radiative dT/dt from the flux divergence, step T over dt (= dt_rad) at constant
+     * ql/qi, convert start and end state to thlE, and use (thl_end - thl_start) / dt as tendency.
+     * clwp/ciwp [kg m-2] are converted back to ql/qi [kg kg-1] with dpg = dp/g [kg m-2].
+     */
     void calc_tendency(
             Float* restrict thlt_rad,
+            const Float* restrict T_start, const Float* restrict clwp, const Float* ciwp,
+            const Float* restrict ph,
+            const Float dt,
             const Float* restrict flux_up, const Float* restrict flux_dn,
             const Float* restrict rho, const Float* exner, const Float* dz,
             const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend,
@@ -487,8 +496,10 @@ namespace
     {
         for (int k=kstart; k<kend; ++k)
         {
-            // Conversion from energy to temperature.
-            const Float fac = Float(1.) / (rho[k]*Constants::cp<Float>*exner[k]*dz[k]);
+            // Conversion from flux divergence [W m-2] to absolute temperature tendency [K s-1].
+            const Float fac = Float(1.) / (rho[k]*Constants::cp<Float>*dz[k]);
+            // Mass of air per unit area in the layer [kg m-2].
+            const Float dpg = (ph[k] - ph[k+1]) / Constants::grav<Float>;
 
             for (int j=jstart; j<jend; ++j)
                 for (int i=istart; i<iend; ++i)
@@ -496,9 +507,24 @@ namespace
                     const int ijk = i + j*jj + k*kk;
                     const int ijk_nogc = (i-igc) + (j-jgc)*jj_nogc + (k-kgc)*kk_nogc;
 
-                    thlt_rad[ijk] -= fac *
+                    // change in absolute T
+                    const Float Tt_rad = - fac *
                         ( flux_up[ijk_nogc+kk_nogc] - flux_up[ijk_nogc]
                         - flux_dn[ijk_nogc+kk_nogc] + flux_dn[ijk_nogc] );
+
+                    // Specific cloud liquid/ice [kg kg-1] from water paths [kg m-2].
+                    const Float qc = clwp[ijk_nogc] / dpg;
+                    const Float qi = ciwp[ijk_nogc] / dpg;
+                    const Float T_end = T_start[ijk_nogc] + Tt_rad * dt;
+
+                    // Convert start and end state to thl: thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)).
+                    const Float thl_start = T_start[ijk_nogc] /exner[k] / (1 + Constants::Lv<Float>*qc/(Constants::cp<Float> * T_start[ijk_nogc])
+                            + Constants::Ls<Float>*qi/(Constants::cp<Float> * T_start[ijk_nogc]));
+                    const Float thl_end = T_end/exner[k] / (1 + Constants::Lv<Float>*qc/(Constants::cp<Float> * T_end)
+                            + Constants::Ls<Float>*qi/(Constants::cp<Float> * T_end));
+
+                    const Float dthl_from_dT = (thl_end - thl_start) / dt;
+                    thlt_rad[ijk] += dthl_from_dT;
                 }
         }
     }
@@ -519,8 +545,14 @@ namespace
     }
 
 
+    /* Radiative thl tendency for the 3D dumps (thl_tend_lw, thl_tend_sw).
+     * Same thlE conversion as in calc_tendency(), but with T, ql and qi from the thermo fields
+     * (3D with ghost cells) instead of the radiation input arrays.
+     */
     void calc_heating_rate(
             Float* restrict heating_rate,
+            const Float* restrict T_start, const Float* restrict ql, const Float* restrict qi,
+            const Float dt,
             const Float* restrict flux_up, const Float* restrict flux_dn,
             const Float* restrict rho, const Float* restrict exner, const Float* restrict dz,
             const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend,
@@ -528,7 +560,8 @@ namespace
     {
         for (int k=kstart; k<kend; ++k)
         {
-            const Float fac = Float(1.) / (rho[k]*Constants::cp<Float>*exner[k]*dz[k]);
+            // Conversion from flux divergence [W m-2] to absolute temperature tendency [K s-1].
+            const Float fac = Float(1.) / (rho[k]*Constants::cp<Float>*dz[k]);
 
             for (int j=jstart; j<jend; ++j)
                 #pragma ivdep
@@ -536,9 +569,20 @@ namespace
                 {
                     const int ijk = i + j*icells + k*ijcells;
 
-                    heating_rate[ijk] = -fac *
+                    // change in absolute T
+                    const Float Tt_rad = -fac *
                         ( flux_up[ijk+ijcells] - flux_up[ijk]
                         - flux_dn[ijk+ijcells] + flux_dn[ijk] );
+
+                    const Float T_end = T_start[ijk] + Tt_rad * dt;
+
+                    // Convert start and end state to thl: thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)).
+                    const Float thl_start = T_start[ijk] /exner[k] / (1 + Constants::Lv<Float>*ql[ijk]/(Constants::cp<Float> * T_start[ijk])
+                            + Constants::Ls<Float>*qi[ijk]/(Constants::cp<Float> * T_start[ijk]));
+                    const Float thl_end = T_end/exner[k] / (1 + Constants::Lv<Float>*ql[ijk]/(Constants::cp<Float> * T_end)
+                            + Constants::Ls<Float>*qi[ijk]/(Constants::cp<Float> * T_end));
+
+                    heating_rate[ijk] = (thl_end - thl_start) / dt;
                 }
         }
     }
@@ -1781,6 +1825,8 @@ void Radiation_rrtmgp<TF>::exec(
 
                 calc_tendency(
                         fields.sd.at("thlt_rad")->fld.data(),
+                        t_lay_a.ptr(), clwp_a.ptr(), ciwp_a.ptr(),
+                        thermo.get_basestate_vector("ph").data(), dt_rad,
                         flux_up.ptr(), flux_dn.ptr(),
                         fields.rhoref.data(), thermo.get_basestate_vector("exner").data(),
                         gd.dz.data(),
@@ -1859,6 +1905,8 @@ void Radiation_rrtmgp<TF>::exec(
 
                     calc_tendency(
                             fields.sd.at("thlt_rad")->fld.data(),
+                            t_lay_a.ptr(), clwp_a.ptr(), ciwp_a.ptr(),
+                            thermo.get_basestate_vector("ph").data(), dt_rad,
                             flux_up.ptr(), flux_dn.ptr(),
                             fields.rhoref.data(), thermo.get_basestate_vector("exner").data(),
                             gd.dz.data(),
@@ -2071,9 +2119,17 @@ void Radiation_rrtmgp<TF>::exec_all_stats(
             if (do_dump && std::count(dumplist.begin(), dumplist.end(), "thl_tend_lw"))
             {
                 auto tmp = fields.get_tmp();
+                auto T  = fields.get_tmp();
+                auto ql = fields.get_tmp();
+                auto qi = fields.get_tmp();
+
+                thermo.get_thermo_field(*T,  "T",  false, false);
+                thermo.get_thermo_field(*ql, "ql", false, false);
+                thermo.get_thermo_field(*qi, "qi", false, false);
 
                 calc_heating_rate(
                         tmp->fld.data(),
+                        T->fld.data(), ql->fld.data(), qi->fld.data(), dt_rad,
                         fields.sd.at("lw_flux_up")->fld.data(), fields.sd.at("lw_flux_dn")->fld.data(),
                         fields.rhoref.data(), thermo.get_basestate_vector("exner").data(), gd.dz.data(),
                         gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend,
@@ -2082,6 +2138,9 @@ void Radiation_rrtmgp<TF>::exec_all_stats(
                 dump.save_dump(tmp->fld.data(), "thl_tend_lw", iotime);
 
                 fields.release_tmp(tmp);
+                fields.release_tmp(T);
+                fields.release_tmp(ql);
+                fields.release_tmp(qi);
             }
         }
 
@@ -2134,9 +2193,17 @@ void Radiation_rrtmgp<TF>::exec_all_stats(
             if (do_dump && std::count(dumplist.begin(), dumplist.end(), "thl_tend_sw"))
             {
                 auto tmp = fields.get_tmp();
+                auto T  = fields.get_tmp();
+                auto ql = fields.get_tmp();
+                auto qi = fields.get_tmp();
+
+                thermo.get_thermo_field(*T,  "T",  false, false);
+                thermo.get_thermo_field(*ql, "ql", false, false);
+                thermo.get_thermo_field(*qi, "qi", false, false);
 
                 calc_heating_rate(
                         tmp->fld.data(),
+                        T->fld.data(), ql->fld.data(), qi->fld.data(), dt_rad,
                         fields.sd.at("sw_flux_up")->fld.data(), fields.sd.at("sw_flux_dn")->fld.data(),
                         fields.rhoref.data(), thermo.get_basestate_vector("exner").data(), gd.dz.data(),
                         gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend,
@@ -2145,6 +2212,9 @@ void Radiation_rrtmgp<TF>::exec_all_stats(
                 dump.save_dump(tmp->fld.data(), "thl_tend_sw", iotime);
 
                 fields.release_tmp(tmp);
+                fields.release_tmp(T);
+                fields.release_tmp(ql);
+                fields.release_tmp(qi);
             }
         }
     }

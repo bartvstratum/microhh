@@ -115,7 +115,9 @@ namespace
                 {
                     const int ijk = i + j*jj + k*kk;
                     const int ij  = i + j*jj;
-                    wt[ijk] += buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], qhmh[ij]);
+                    // thlE is not linear in T: get T from the saturation adjustment for the virtual temperature.
+                    Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
+                    wt[ijk] += buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], ssa.t, qhmh[ij]);
                 }
         }
     }
@@ -144,6 +146,16 @@ namespace
                         ql[ijk] = ssa.ql;
                         qi[ijk] = ssa.qi;
                     }
+
+                for (int j=jstart; j<jend; j++)
+                    #pragma ivdep
+                    for (int i=istart; i<iend; i++)
+                    {
+                        const int ijk = i + j*jj + k*kk;
+                        // thlE is not linear in T: get T from the saturation adjustment for the virtual temperature.
+                        Struct_sat_adjust<TF> ssa = sat_adjust(thl[ijk], qt[ijk], p[k], ex);
+                        b[ijk] = buoyancy(ex, thl[ijk], qt[ijk], ql[ijk], qi[ijk], thvref[k], ssa.t, qhm[ijk]);
+                    }
             }
             else
             {
@@ -157,14 +169,14 @@ namespace
                         qhm[ijk] = 0.;
                     }
 
+                for (int j=jstart; j<jend; j++)
+                    #pragma ivdep
+                    for (int i=istart; i<iend; i++)
+                    {
+                        const int ijk = i + j*jj + k*kk;
+                        b[ijk] = buoyancy_no_ql(thl[ijk], qt[ijk], thvref[k]);
+                    }
             }
-            for (int j=jstart; j<jend; j++)
-                #pragma ivdep
-                for (int i=istart; i<iend; i++)
-                {
-                    const int ijk = i + j*jj + k*kk;
-                    b[ijk] = buoyancy(ex, thl[ijk], qt[ijk], ql[ijk], qi[ijk], thvref[k], qhm[ijk]);
-                }
         }
     }
 
@@ -206,6 +218,18 @@ namespace
                         ql[ij] = ssa.ql;
                         qi[ij] = ssa.qi;
                     }
+
+                for (int j=jstart; j<jend; j++)
+                    #pragma ivdep
+                    for (int i=istart; i<iend; i++)
+                    {
+                        const int ijk = i + j*jj + k*kk;
+                        const int ij  = i + j*jj;
+
+                        // thlE is not linear in T: get T from the saturation adjustment for the virtual temperature.
+                        Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
+                        bh[ijk] = buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], ssa.t, qhmh[ij]);
+                    }
             }
             else
             {
@@ -218,16 +242,17 @@ namespace
                         qi[ij] = 0.;
                         qhmh[ij] = 0.;
                     }
-            }
-            for (int j=jstart; j<jend; j++)
-                #pragma ivdep
-                for (int i=istart; i<iend; i++)
-                {
-                    const int ijk = i + j*jj + k*kk;
-                    const int ij  = i + j*jj;
 
-                    bh[ijk] = buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], qhmh[ij]);
-                }
+                for (int j=jstart; j<jend; j++)
+                    #pragma ivdep
+                    for (int i=istart; i<iend; i++)
+                    {
+                        const int ijk = i + j*jj + k*kk;
+                        const int ij  = i + j*jj;
+
+                        bh[ijk] = buoyancy_no_ql(thlh[ij], qth[ij], thvrefh[k]);
+                    }
+            }
         }
     }
 
@@ -665,7 +690,7 @@ namespace
                     const int ijk = i + j*jj + k*kk;
 
                     Struct_sat_adjust<TF> ssa = sat_adjust(thl[ijk], qt[ijk], p[k], ex);
-                    thv[ijk] = virtual_temperature(ex, thl[ijk], qt[ijk], ssa.ql, ssa.qi, qhm[ijk]);
+                    thv[ijk] = virtual_temperature(ex, thl[ijk], qt[ijk], ssa.ql, ssa.qi, ssa.t, qhm[ijk]);
                 }
         }
     }

@@ -43,17 +43,25 @@ namespace Thermo_moist_functions
     using Fast_math::pow2;
 
     // INLINE FUNCTIONS
+
+    /* Definition of thl used throughout the moist thermodynamics (BF04 E, Tripoli & Cotton without empirical correction):
+     *   thl = T/exn / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T))
+     * This is not linear in T, so th = T/exn cannot be reconstructed from thl, ql and qi alone;
+     * T has to come from the saturation adjustment (ssa.t) and is passed in explicitly.
+     */
     template<typename TF>
-    CUDA_MACRO inline TF virtual_temperature(const TF exn, const TF thl, const TF qt, const TF ql, const TF qi, const TF qhm)
+    CUDA_MACRO inline TF virtual_temperature(const TF exn, const TF thl, const TF qt, const TF ql, const TF qi,
+                                             const TF T, const TF qhm)
     {
-        const TF th = thl + Lv<TF>*ql/(cp<TF>*exn) + Ls<TF>*qi/(cp<TF>*exn);
+        // Potential temperature from the absolute temperature (independent of the thl definition).
+        const TF th = T / exn;
         return th * (TF(1.) - (TF(1.) - Rv<TF>/Rd<TF>)*qt - Rv<TF>/Rd<TF>*(ql+qi) - qhm);
     }
 
     template<typename TF>
-    CUDA_MACRO inline TF buoyancy(const TF exn, const TF thl, const TF qt, const TF ql, const TF qi, const TF thvref, const TF qhm)
+    CUDA_MACRO inline TF buoyancy(const TF exn, const TF thl, const TF qt, const TF ql, const TF qi, const TF thvref, const TF T, const TF qhm)
     {
-        return grav<TF> * (virtual_temperature(exn, thl, qt, ql, qi, qhm) - thvref) / thvref;
+        return grav<TF> * (virtual_temperature(exn, thl, qt, ql, qi, T, qhm) - thvref) / thvref;
     }
 
     template<typename TF>
@@ -174,6 +182,36 @@ namespace Thermo_moist_functions
         return pow((p/p0<TF>), (Rd<TF>/cp<TF>));
     }
 
+    // Root finding function for the saturation adjustment, warm (liquid only), BF04 E:
+    // f(T) = -tl + T / (1 + Lv*ql/(cp*T)), with tl = thl*exn and ql = qt - qsat_liq(T).
+    template<typename TF>
+    CUDA_MACRO inline TF f_E(const TF p, const TF T, const TF qt, const TF tl)
+    {
+
+        const TF ql = qt - qsat_liq(p, T);
+        const TF f = - tl + T * pow(1 + (Lv<TF> * ql) / (cp<TF> * T), -1) ;
+
+        return f;
+    }
+
+    // Root finding function for the saturation adjustment, mixed phase, BF04 E:
+    // f(T) = -tl + T / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)), with tl = thl*exn and
+    // ql/qi = alpha_w/alpha_i * (qt - qsat(T)) following the Tomita (2008) water fraction.
+    template<typename TF>
+    CUDA_MACRO inline TF f_E_deep(const TF p, const TF T, const TF qt, const TF tl)
+    {
+
+        const TF alpha_w = water_fraction(T);
+        const TF alpha_i = TF(1.) - alpha_w;
+        const TF qs = qsat(p, T);
+        const TF ql = alpha_w * (qt - qs);
+        const TF qi = alpha_i * (qt - qs);
+
+        const TF f = - tl + T * pow(1 + (Lv<TF> * ql) / (cp<TF> * T) + (Ls<TF> * qi)/(cp<TF> * T), -1) ;
+
+        return f;
+    }
+
     template<typename TF>
     struct Struct_sat_adjust
     {
@@ -186,12 +224,14 @@ namespace Thermo_moist_functions
     template<typename TF>
     inline Struct_sat_adjust<TF> sat_adjust(const TF thl, const TF qt, const TF p, const TF exn)
     {
+        // Saturation adjustment for thlE.
         using Fast_math::pow2;
 
         int niter = 0;
         int nitermax = 10;
         TF tnr_old = TF(1.e9);
 
+        // Without condensate thl = T/exn, so tl = thl*exn is the temperature of the unsaturated state.
         const TF tl = thl * exn;
         TF qs = qsat_liq(p, tl);
 
@@ -208,8 +248,8 @@ namespace Thermo_moist_functions
             return ans;
 
         /* Saturation adjustment solver.
-         * Root finding function is f(T) = T - tnr - Lv/cp*qt + alpha_w * Lv/cp*qs(T) + alpha_i*Ls/cp*qs(T)
-         * dq_sat/dT derivatives can be rewritten using Claussius-Clapeyron (desat/dT = L{v,s}*esat / (Rv*T^2)).
+         * Root finding function is f(T) = - tl + T / (1 + Lv*ql(T)/(cp*T) + Ls*qi(T)/(cp*T)) (BF04 E),
+         * with f'(T) approximated by a forward finite difference.
          */
 
         TF tnr = tl;
@@ -221,11 +261,12 @@ namespace Thermo_moist_functions
             {
                 ++niter;
                 tnr_old = tnr;
-                qs = qsat_liq(p, tnr);
-                const TF f =
-                    tnr - tl - Lv<TF>/cp<TF>*(qt - qs);
 
-                const TF f_prime = TF(1.) + Lv<TF>/cp<TF>*dqsatdT_liq(p, tnr);
+                const TF epsilon = 0.1;
+
+                // BF04 E
+                const TF f = f_E(p, tnr, qt, tl);
+                const TF f_prime = (f_E(p, tnr + epsilon, qt, tl) - f)/epsilon;
 
                 tnr -= f / f_prime;
             }
@@ -242,22 +283,12 @@ namespace Thermo_moist_functions
             {
                 ++niter;
                 tnr_old = tnr;
-                qs = qsat(p, tnr);
-                const TF alpha_w = water_fraction(tnr);
-                const TF alpha_i = TF(1.) - alpha_w;
-                const TF dalphadT = (alpha_w > TF(0.) && alpha_w < TF(1.)) ? TF(0.025) : TF(0.);
-                const TF dqsatdT_w = dqsatdT_liq(p, tnr);
-                const TF dqsatdT_i = dqsatdT_ice(p, tnr);
 
-                const TF f =
-                    tnr - tl - alpha_w*Lv<TF>/cp<TF>*qt - alpha_i*Ls<TF>/cp<TF>*qt
-                             + alpha_w*Lv<TF>/cp<TF>*qs + alpha_i*Ls<TF>/cp<TF>*qs;
+                const TF epsilon = 0.1;
 
-                const TF f_prime = TF(1.)
-                    - dalphadT*Lv<TF>/cp<TF>*qt + dalphadT*Ls<TF>/cp<TF>*qt
-                    + dalphadT*Lv<TF>/cp<TF>*qs - dalphadT*Ls<TF>/cp<TF>*qs
-                    + alpha_w*Lv<TF>/cp<TF>*dqsatdT_w
-                    + alpha_i*Ls<TF>/cp<TF>*dqsatdT_i;
+                // BF04 E
+                const TF f = f_E_deep(p, tnr, qt, tl);
+                const TF f_prime = (f_E_deep(p, tnr + epsilon, qt, tl) - f)/epsilon;
 
                 tnr -= f / f_prime;
             }
@@ -278,6 +309,115 @@ namespace Thermo_moist_functions
         {
             std::string error = "Non-converging saturation adjustment: thl, qt, p = "
                 + std::to_string(thl) + ", " + std::to_string(qt) + ", " + std::to_string(p);
+
+            #ifdef USEMPI
+            std::cout << "SINGLE PROCESS EXCEPTION: " << error << std::endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            throw std::runtime_error(error);
+            #endif
+        }
+
+        return ans;
+    }
+
+    /* Saturation adjustment in absolute temperature (not thl), used by the microphysics.
+     * Input is a (possibly non-equilibrium) state T, qc, qi; tl = T - Lv/cp*qc - Ls/cp*qi is the
+     * temperature after evaporating/sublimating all condensate at constant cp. This is an energy
+     * conversion in T and independent of the thl definition; converting the result back to thl
+     * (thlE) is done by the caller.
+     */
+    template<typename TF>
+    inline Struct_sat_adjust<TF> sat_adjust_absolute_T_ice(
+            const TF T, const TF qt, const TF p, const TF qc, const TF qv, const TF qi, const TF Lv, const TF Ls, const TF cp)
+    {
+        int niter = 0;
+        int nitermax = 10;
+        TF tnr_old = TF(1.e9);
+
+        // the essential difference with the satadjust above is in the tl here:
+        TF tl = T - (Lv / cp) * qc -  Ls / cp * qi;
+        TF qs = qsat_liq(p, tl);
+
+        Struct_sat_adjust<TF> ans =
+                {
+                        TF(0.), // ql
+                        TF(0.), // qi
+                        tl,     // t
+                        qs,     // qs
+                };
+
+        // Calculate if q-qs(Tl) <= 0. If so, return 0. Else continue with saturation adjustment.
+        if (qt-ans.qs <= TF(0.))
+            return ans;
+
+        /* Saturation adjustment solver.
+         * Root finding function is f(T) = T - tnr - Lv/cp*qt + alpha_w * Lv/cp*qs(T) + alpha_i*Ls/cp*qs(T)
+         * dq_sat/dT derivatives can be rewritten using Claussius-Clapeyron (desat/dT = L{v,s}*esat / (Rv*T^2)).
+         */
+
+        TF tnr = tl;
+
+        if (tl >= T0<TF>)
+        {
+            // Warm adjustment.
+            while (std::fabs(tnr-tnr_old)/tnr_old > TF(1.e-5) && niter < nitermax)
+            {
+                ++niter;
+                tnr_old = tnr;
+
+                qs = qsat_liq(p, tnr);
+                const TF f = tnr - tl - Lv/cp*(qt - qs);
+                const TF f_prime = TF(1.) + Lv/cp*dqsatdT_liq(p, tnr);
+
+                tnr -= f / f_prime;
+            }
+        }
+        else
+        {
+            // Cold adjustment.
+            while (std::fabs(tnr - tnr_old) / tnr_old > TF(1.e-5) && niter < nitermax) {
+                ++niter;
+                tnr_old = tnr;
+                qs = qsat(p, tnr);
+                const TF alpha_w = water_fraction(tnr);
+                const TF alpha_i = TF(1.) - alpha_w;
+                const TF dalphadT = (alpha_w > TF(0.) && alpha_w < TF(1.)) ? TF(0.025) : TF(0.);
+                const TF dqsatdT_w = dqsatdT_liq(p, tnr);
+                const TF dqsatdT_i = dqsatdT_ice(p, tnr);
+
+                const TF f =
+                        tnr - tl - alpha_w * Lv / cp * qt - alpha_i * Ls / cp * qt
+                        + alpha_w * Lv / cp * qs + alpha_i * Ls / cp * qs;
+
+                const TF f_prime = TF(1.)
+                                   - dalphadT * Lv / cp * qt + dalphadT * Ls / cp * qt
+                                   + dalphadT * Lv / cp * qs - dalphadT * Ls / cp * qs
+                                   + alpha_w * Lv / cp * dqsatdT_w
+                                   + alpha_i * Ls / cp * dqsatdT_i;
+
+                tnr -= f / f_prime;
+            }
+        }
+
+        const TF alpha_w = water_fraction(tnr);
+        const TF alpha_i = TF(1.) - alpha_w;
+
+        qs = qsat(p, tnr);
+        const TF qlqi = std::max(TF(0.), qt - qs);
+
+        ans.ql = alpha_w*qlqi;
+        ans.qi = alpha_i*qlqi;
+        ans.t  = tnr;
+        ans.qs = qs;
+
+
+        if (niter == nitermax)
+        {
+            std::string error = "Non-converging saturation-adjustment. Input: T="
+                                + std::to_string(T) + " K, qt="
+                                + std::to_string(qt) + " kg/kg, p="
+                                + std::to_string(p) + " Pa";
 
             #ifdef USEMPI
             std::cout << "SINGLE PROCESS EXCEPTION: " << error << std::endl;
@@ -321,7 +461,7 @@ namespace Thermo_moist_functions
         TF qi = ssa.qi;
 
         // MT: assume no hydrometeors in the base state, hence use TF(0)
-        thvh[kstart] = virtual_temperature(exh[kstart], thlsurf, qtsurf, ql, qi, TF(0));
+        thvh[kstart] = virtual_temperature(exh[kstart], thlsurf, qtsurf, ql, qi, ssa.t, TF(0));
         rhoh[kstart] = pbot / (Rd<TF> * exh[kstart] * thvh[kstart]);
 
         // Calculate the first full level pressure
@@ -334,7 +474,7 @@ namespace Thermo_moist_functions
             ssa      = sat_adjust(thlmean[k-1], qtmean[k-1], pref[k-1], ex[k-1]);
             ql       = ssa.ql;
             qi       = ssa.qi;
-            thv[k-1] = virtual_temperature(ex[k-1], thlmean[k-1], qtmean[k-1], ql, qi, TF(0));
+            thv[k-1] = virtual_temperature(ex[k-1], thlmean[k-1], qtmean[k-1], ql, qi, ssa.t, TF(0));
             rho[k-1] = pref[k-1] / (Rd<TF> * ex[k-1] * thv[k-1]);
 
             // 2. Calculate pressure at half-level[k]
@@ -349,7 +489,7 @@ namespace Thermo_moist_functions
             const TF qli = ssa.ql;
             const TF qii = ssa.qi;
 
-            thvh[k]  = virtual_temperature(exh[k], thli, qti, qli, qii, TF(0));
+            thvh[k]  = virtual_temperature(exh[k], thli, qti, qli, qii, ssa.t, TF(0));
             rhoh[k]  = prefh[k] / (Rd<TF> * exh[k] * thvh[k]);
 
             // 4. Calculate pressure at full-level[k]
