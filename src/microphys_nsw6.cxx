@@ -194,11 +194,11 @@ namespace
                 {
                     const int ijk = i + j*jj + k*kk;
 
-                    // Compute T and qv from satadjust. thlE is not linear in T, so T cannot be
-                    // reconstructed from thl, ql and qi with T = exner*thl + Lv/cp*ql + Ls/cp*qi (thlD).
-                    const Struct_sat_adjust<TF> ssa = sat_adjust(thl[ijk], qt[ijk], p[k], exner[k]);
-                    const TF T = ssa.t;
-                    const TF qv = std::min(ssa.qs, qt[ijk]);
+                    // T from thlE with known ql and qi: positive root of T^2 - tl*T - tl*A = 0, A = (Lv*ql + Ls*qi)/cp.
+                    const TF tl = exner[k]*thl[ijk];
+                    const TF A  = (Lv<TF>*ql[ijk] + Ls<TF>*qi[ijk]) / cp<TF>;
+                    const TF T  = TF(0.5) * (tl + std::sqrt(tl*tl + TF(4.)*tl*A));
+                    const TF qv = qt[ijk] - ql[ijk] - qi[ijk];
 
                     // Flag the sign of the absolute temperature.
                     const TF T_pos = TF(T >= T0<TF>);

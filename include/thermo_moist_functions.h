@@ -46,8 +46,7 @@ namespace Thermo_moist_functions
 
     /* Definition of thl used throughout the moist thermodynamics (BF04 E, Tripoli & Cotton without empirical correction):
      *   thl = T/exn / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T))
-     * This is not linear in T, so th = T/exn cannot be reconstructed from thl, ql and qi alone;
-     * T has to come from the saturation adjustment (ssa.t) and is passed in explicitly.
+     * This is not linear in T; T is passed in explicitly (ssa.t).
      */
     template<typename TF>
     CUDA_MACRO inline TF virtual_temperature(const TF exn, const TF thl, const TF qt, const TF ql, const TF qi,

@@ -78,7 +78,7 @@ namespace
     void calc_buoyancy_tend_2nd(
             TF* restrict wt, TF* restrict thl, TF* restrict qt, TF* restrict qhm,
             TF* restrict ph, TF* restrict thlh, TF* restrict qth, TF* restrict qhmh,
-            TF* restrict ql, TF* restrict qi, TF* restrict thvrefh,
+            TF* restrict ql, TF* restrict qi, TF* restrict T, TF* restrict thvrefh,
             const int istart, const int iend,
             const int jstart, const int jend,
             const int kstart, const int kend,
@@ -107,6 +107,7 @@ namespace
                     Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
                     ql[ij] = ssa.ql;
                     qi[ij] = ssa.qi;
+                    T[ij]  = ssa.t;
                 }
 
             for (int j=jstart; j<jend; j++)
@@ -115,9 +116,7 @@ namespace
                 {
                     const int ijk = i + j*jj + k*kk;
                     const int ij  = i + j*jj;
-                    // thlE is not linear in T: get T from the saturation adjustment for the virtual temperature.
-                    Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
-                    wt[ijk] += buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], ssa.t, qhmh[ij]);
+                    wt[ijk] += buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], T[ij], qhmh[ij]);
                 }
         }
     }
@@ -125,7 +124,7 @@ namespace
     template<typename TF>
     void calc_buoyancy(
             TF* restrict b, TF* restrict thl, TF* restrict qt, TF* restrict qhm,
-            TF* restrict p, TF* restrict ql, TF* restrict qi, TF* restrict thvref,
+            TF* restrict p, TF* restrict ql, TF* restrict qi, TF* restrict T, TF* restrict thvref,
             const int istart, const int iend,
             const int jstart, const int jend,
             const int kstart, const int kend,
@@ -145,6 +144,7 @@ namespace
                         Struct_sat_adjust<TF> ssa = sat_adjust(thl[ijk], qt[ijk], p[k], ex);
                         ql[ijk] = ssa.ql;
                         qi[ijk] = ssa.qi;
+                        T[ijk]  = ssa.t;
                     }
 
                 for (int j=jstart; j<jend; j++)
@@ -152,9 +152,7 @@ namespace
                     for (int i=istart; i<iend; i++)
                     {
                         const int ijk = i + j*jj + k*kk;
-                        // thlE is not linear in T: get T from the saturation adjustment for the virtual temperature.
-                        Struct_sat_adjust<TF> ssa = sat_adjust(thl[ijk], qt[ijk], p[k], ex);
-                        b[ijk] = buoyancy(ex, thl[ijk], qt[ijk], ql[ijk], qi[ijk], thvref[k], ssa.t, qhm[ijk]);
+                        b[ijk] = buoyancy(ex, thl[ijk], qt[ijk], ql[ijk], qi[ijk], thvref[k], T[ijk], qhm[ijk]);
                     }
             }
             else
@@ -183,7 +181,7 @@ namespace
     template<typename TF>
     void calc_buoyancy_h(TF* restrict bh, TF* restrict thl, TF* restrict qt, TF* restrict qhm,
                          TF* restrict ph, TF* restrict thvrefh, TF* restrict thlh, TF* restrict qth, TF* restrict qhmh,
-                         TF* restrict ql, TF* restrict qi,
+                         TF* restrict ql, TF* restrict qi, TF* restrict T,
                          const int istart, const int iend,
                          const int jstart, const int jend,
                          const int kstart, const int kend,
@@ -217,6 +215,7 @@ namespace
                         Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
                         ql[ij] = ssa.ql;
                         qi[ij] = ssa.qi;
+                        T[ij]  = ssa.t;
                     }
 
                 for (int j=jstart; j<jend; j++)
@@ -226,9 +225,7 @@ namespace
                         const int ijk = i + j*jj + k*kk;
                         const int ij  = i + j*jj;
 
-                        // thlE is not linear in T: get T from the saturation adjustment for the virtual temperature.
-                        Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
-                        bh[ijk] = buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], ssa.t, qhmh[ij]);
+                        bh[ijk] = buoyancy(exnh, thlh[ij], qth[ij], ql[ij], qi[ij], thvrefh[k], T[ij], qhmh[ij]);
                     }
             }
             else
@@ -1533,7 +1530,7 @@ void Thermo_moist<TF>::exec(const double dt, Stats<TF>& stats)
     calc_buoyancy_tend_2nd(
             fields.mt.at("w")->fld.data(), fields.sp.at("thl")->fld.data(), fields.sp.at("qt")->fld.data(), qhm->fld.data(), bs.prefh.data(),
             &tmp->fld[0*gd.ijcells], &tmp->fld[1*gd.ijcells],
-            &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells], &tmp->fld[4*gd.ijcells], bs.thvrefh.data(),
+            &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells], &tmp->fld[4*gd.ijcells], &tmp->fld[5*gd.ijcells], bs.thvrefh.data(),
             gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend,
             gd.icells, gd.ijcells);
 
@@ -1697,19 +1694,21 @@ void Thermo_moist<TF>::get_thermo_field(
     {
         auto tmp  = fields.get_tmp();
         auto tmp2 = fields.get_tmp();
+        auto tmp3 = fields.get_tmp();
         calc_buoyancy(
                 fld.fld.data(), fields.sp.at("thl")->fld.data(), fields.sp.at("qt")->fld.data(), qhm->fld.data(), base.pref.data(),
-                tmp->fld.data(), tmp2->fld.data(), base.thvref.data(),
+                tmp->fld.data(), tmp2->fld.data(), tmp3->fld.data(), base.thvref.data(),
                 gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend, gd.kcells, gd.icells, gd.ijcells);
         fields.release_tmp(tmp );
         fields.release_tmp(tmp2);
+        fields.release_tmp(tmp3);
     }
     else if (name == "b_h")
     {
         auto tmp = fields.get_tmp();
         calc_buoyancy_h(
                 fld.fld.data(), fields.sp.at("thl")->fld.data(), fields.sp.at("qt")->fld.data(), qhm->fld.data(),base.prefh.data(), base.thvrefh.data(),
-                &tmp->fld[0*gd.ijcells], &tmp->fld[1*gd.ijcells], &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells], &tmp->fld[4*gd.ijcells],
+                &tmp->fld[0*gd.ijcells], &tmp->fld[1*gd.ijcells], &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells], &tmp->fld[4*gd.ijcells], &tmp->fld[5*gd.ijcells],
                 gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend, gd.icells, gd.ijcells);
         fields.release_tmp(tmp);
     }
