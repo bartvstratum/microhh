@@ -44,6 +44,9 @@
 // Constants, move out later.
 namespace
 {
+    // Saturation adjust the end state of `conversion()`; if false, the next `sat_adjust()` (thlE invariant) equilibrates it.
+    constexpr bool sw_satadjust_end = true;
+
     template<typename TF> constexpr TF qv_min = 1.e-7; // Threshold qv for calculating microphysical terms.
     template<typename TF> constexpr TF ql_min = 1.e-7; // Threshold ql for calculating microphysical terms.
     template<typename TF> constexpr TF qi_min = 1.e-7; // Threshold qi for calculating microphysical terms.
@@ -692,10 +695,13 @@ namespace
                     TF T_end = T + dT * dt;
 
                     // Saturation adjustment of the end state in absolute temperature.
-                    Struct_sat_adjust<TF> ssa_end = sat_adjust_absolute_T_ice<TF>(T_end, qt_end, p[k], qc_end, qv_end, qi_end, Lv<TF>, Ls<TF>, cp<TF>);
-                    T_end = ssa_end.t;
-                    qc_end = ssa_end.ql;
-                    qi_end = ssa_end.qi;
+                    if (sw_satadjust_end)
+                    {
+                        Struct_sat_adjust<TF> ssa_end = sat_adjust_absolute_T_ice<TF>(T_end, qt_end, p[k], qc_end, qv_end, qi_end, Lv<TF>, Ls<TF>, cp<TF>);
+                        T_end = ssa_end.t;
+                        qc_end = ssa_end.ql;
+                        qi_end = ssa_end.qi;
+                    }
 
                     // Convert the end state to thl: thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)).
                     const TF thl_end = T_end/exner[k] / (1   + Lv<TF>*qc_end/(cp<TF> * T_end)
