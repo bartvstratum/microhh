@@ -35,36 +35,6 @@
 namespace
 {
     template<typename TF>
-    void accumulate_tendency(
-            TF* const restrict acc,
-            const TF* const restrict tend,
-            const TF sub_dt,
-            const int istart, const int iend,
-            const int jstart, const int jend,
-            const int kstart, const int kend,
-            const int icells, const int ijcells)
-    {
-        for (int k=kstart; k<kend; ++k)
-            for (int j=jstart; j<jend; ++j)
-                #pragma ivdep
-                for (int i=istart; i<iend; ++i)
-                {
-                    const int ijk = i + j*icells + k*ijcells;
-                    acc[ijk] += sub_dt * tend[ijk];
-                }
-    }
-
-
-    template<typename TF>
-    void scale_field(TF* const restrict fld, const TF fac, const int ncells)
-    {
-        #pragma ivdep
-        for (int n=0; n<ncells; ++n)
-            fld[n] *= fac;
-    }
-
-
-    template<typename TF>
     void calc_flux_u(
             TF* const restrict flux,
             const TF* const restrict u,
@@ -247,8 +217,7 @@ namespace
 
 template<typename TF>
 Budget3d<TF>::Budget3d(Master& masterin, Grid<TF>& gridin, Fields<TF>& fieldsin, Thermo<TF>& thermoin, Dump<TF>& dump, Input& inputin) :
-    master(masterin), grid(gridin), fields(fieldsin), thermo(thermoin),
-    elapsed_time(0.)
+    master(masterin), grid(gridin), fields(fieldsin), thermo(thermoin)
 {
     if (fields.sd.find("eviscs") != fields.sd.end())
     {
@@ -272,11 +241,6 @@ Budget3d<TF>::Budget3d(Master& masterin, Grid<TF>& gridin, Fields<TF>& fieldsin,
                 && fields.at.find(name.substr(0, name.size()-5)) != fields.at.end())
         {
             const std::string varname = name.substr(0, name.size()-5);
-            auto& tend = *fields.at.at(varname);
-
-            fields.init_diagnostic_field(
-                    name, "Accumulated mean tendency of " + varname,
-                    tend.unit, "budget3d", tend.loc);
 
             tendencylist.push_back(varname);
             it = dumplist.erase(it);
@@ -310,55 +274,6 @@ Budget3d<TF>::~Budget3d()
 {
 }
 
-#ifndef USECUDA
-template<typename TF>
-void Budget3d<TF>::exec(const double sub_dt, const double dt, const bool in_substep)
-{
-    if (!swbudget3d)
-        return;
-
-    auto& gd = grid.get_grid_data();
-    const TF sub_dt_tf = static_cast<TF>(sub_dt);
-
-    for (auto& varname : tendencylist)
-    {
-        auto& acc  = *fields.sd.at(varname + "_tend");
-        auto& tend = *fields.at.at(varname);
-
-        accumulate_tendency(
-                acc.fld.data(),
-                tend.fld.data(),
-                sub_dt_tf,
-                gd.istart, gd.iend,
-                gd.jstart, gd.jend,
-                gd.kstart, gd.kend,
-                gd.icells, gd.ijcells);
-    }
-
-    // Sum of cB over the RK substeps is not 1; count the full time step once.
-    if (!in_substep)
-        elapsed_time += dt;
-}
-#endif
-
-template<typename TF>
-void Budget3d<TF>::prepare_dump()
-{
-    if (!swbudget3d || elapsed_time <= 0.)
-        return;
-
-    // At this point `fld` on the host is up to date: the generic dump/cross/stats
-    // block in Model::exec() always calls fields->backward_device() first.
-    auto& gd = grid.get_grid_data();
-    const TF dti = TF(1.) / static_cast<TF>(elapsed_time);
-
-    for (auto& varname : tendencylist)
-    {
-        auto& acc = *fields.sd.at(varname + "_tend");
-        scale_field(acc.fld.data(), dti, gd.ncells);
-    }
-}
-
 template<typename TF>
 void Budget3d<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime)
 {
@@ -366,10 +281,7 @@ void Budget3d<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime)
         return;
 
     for (auto& varname : tendencylist)
-    {
-        auto& acc = *fields.sd.at(varname + "_tend");
-        dump.save_dump(acc.fld.data(), varname + "_tend", iotime);
-    }
+        dump.save_dump(fields.at.at(varname)->fld.data(), varname + "_tend", iotime);
 
     if (fluxlist.empty())
         return;
@@ -435,25 +347,6 @@ void Budget3d<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime)
 
     fields.release_tmp(flux);
     fields.release_tmp(s_tmp);
-}
-
-template<typename TF>
-void Budget3d<TF>::reset()
-{
-    if (!swbudget3d)
-        return;
-
-    for (auto& varname : tendencylist)
-    {
-        auto& acc = *fields.sd.at(varname + "_tend");
-        std::fill(acc.fld.begin(), acc.fld.end(), TF(0));
-
-        #ifdef USECUDA
-        fields.forward_field_device_3d(acc.fld_g, acc.fld.data());
-        #endif
-    }
-
-    elapsed_time = 0.;
 }
 
 

@@ -465,6 +465,10 @@ void Fields<TF>::backward_device()
     for (auto& it : a)
         backward_field3d_device(it.second.get());
 
+    // Tendencies atmosphere. Necessary for the 3D tendency dumps (Budget3d).
+    for (auto& it : at)
+        backward_field_device_3d(it.second->fld.data(), it.second->fld_g);
+
     // Prognostic 2D fields
     for (auto& it : ap2d)
         backward_field_device_2d(it.second->fld.data(), it.second->fld_g);

@@ -40,10 +40,7 @@ class Budget3d
         Budget3d(Master&, Grid<TF>&, Fields<TF>&, Thermo<TF>&, Dump<TF>&, Input&);
         ~Budget3d();
 
-        void exec(const double sub_dt, const double dt, const bool in_substep);   ///< Accumulate one RK substep's tendency.
-        void prepare_dump();              ///< Normalize accumulators into a mean tendency before writing.
         void exec_dump(Dump<TF>&, unsigned long);
-        void reset();                     ///< Zero the accumulators after writing.
 
     private:
         Master& master;
@@ -53,7 +50,6 @@ class Budget3d
 
         bool swbudget3d;
         std::vector<std::string> tendencylist;
-        double elapsed_time;
 
         std::vector<std::string> fluxlist;
         std::string evisc_name;

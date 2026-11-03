@@ -493,10 +493,6 @@ void Model<TF>::exec()
 
                 }
 
-                // Accumulate the RK-weighted total tendency for the 3D budget, if necessary.
-                // Done after the dumps, so that the current time step counts towards the next dump.
-                budget3d->exec(timeloop->get_sub_time_step(), timeloop->get_dt(), timeloop->in_substep());
-
                 // Exit the simulation when the runtime has been hit.
                 if (timeloop->is_finished())
                     break;
@@ -672,14 +668,10 @@ void Model<TF>::calculate_statistics(int iteration, double time, unsigned long i
     {
         master.print_message("Saving field dumps for time %f\n", time);
 
-        budget3d->prepare_dump();
-
         fields   ->exec_dump(*dump, iotime);
         thermo   ->exec_dump(*dump, iotime);
         microphys->exec_dump(*dump, iotime, dt);
         budget3d ->exec_dump(*dump, iotime);
-
-        budget3d->reset();
     }
 
     if (stats->do_statistics(itime))
