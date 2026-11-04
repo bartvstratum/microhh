@@ -129,6 +129,7 @@ namespace
             TF* const restrict qtt, TF* const restrict thlt,
             TF* const restrict net_frz,
             TF* const restrict thl_tend_micro,
+            TF* const restrict qt_tend_micro,
             const TF* const restrict qr, const TF* const restrict qs, const TF* const restrict qg,
             const TF* const restrict qt, const TF* const restrict thl,
             const TF* const restrict ql, const TF* const restrict qi,
@@ -713,6 +714,9 @@ namespace
 
                     if (thl_tend_micro != nullptr)
                         thl_tend_micro[ijk] = dthl_from_dT;
+
+                    if (qt_tend_micro != nullptr)
+                        qt_tend_micro[ijk] = dqc + dqi + dqv;
                 }
         }
     }
@@ -1063,7 +1067,7 @@ void Microphys_nsw6<TF>::create(
 
     // Create dumps
     // 1. Variables that this class can calculate/provide:
-    const std::vector<std::string> allowed_dumpvars = {"qrsg_tend_sed", "qr_tend_sed", "qsg_tend_sed", "qtr_tend_frz", "thl_tend_micro"};
+    const std::vector<std::string> allowed_dumpvars = {"qrsg_tend_sed", "qr_tend_sed", "qsg_tend_sed", "qtr_tend_frz", "thl_tend_micro", "qt_tend_micro"};
 
     // 2. Cross-reference with the variables requested in the .ini file:
     std::vector<std::string>& dumplist_global = dump.get_dumplist();
@@ -1094,6 +1098,14 @@ void Microphys_nsw6<TF>::create(
                 "thl_tend_micro", "Microphysics tendency of thl", "K s-1", group_name, gd.sloc);
         fields.sd.at("thl_tend_micro")->init();
     }
+
+    if (std::count(dumplist.begin(), dumplist.end(), "qt_tend_micro"))
+    {
+        auto& gd = grid.get_grid_data();
+        fields.init_diagnostic_field(
+                "qt_tend_micro", "Microphysics tendency of qt", "kg kg-1 s-1", group_name, gd.sloc);
+        fields.sd.at("qt_tend_micro")->init();
+    }
 }
 
 #ifndef USECUDA
@@ -1123,11 +1135,18 @@ void Microphys_nsw6<TF>::exec(Thermo<TF>& thermo, const double dt, Stats<TF>& st
     if (thl_tend_micro != nullptr)
         std::fill(thl_tend_micro_it->second->fld.begin(), thl_tend_micro_it->second->fld.end(), TF(0.));
 
+    const auto qt_tend_micro_it = fields.sd.find("qt_tend_micro");
+    TF* const qt_tend_micro = (qt_tend_micro_it != fields.sd.end()) ? qt_tend_micro_it->second->fld.data() : nullptr;
+
+    if (qt_tend_micro != nullptr)
+        std::fill(qt_tend_micro_it->second->fld.begin(), qt_tend_micro_it->second->fld.end(), TF(0.));
+
     conversion(
             fields.st.at("qr")->fld.data(), fields.st.at("qs")->fld.data(), fields.st.at("qg")->fld.data(),
             fields.st.at("qt")->fld.data(), fields.st.at("thl")->fld.data(),
             net_frz,
             thl_tend_micro,
+            qt_tend_micro,
             fields.sp.at("qr")->fld.data(), fields.sp.at("qs")->fld.data(), fields.sp.at("qg")->fld.data(),
             fields.sp.at("qt")->fld.data(), fields.sp.at("thl")->fld.data(),
             ql->fld.data(), qi->fld.data(),
@@ -1315,6 +1334,9 @@ void Microphys_nsw6<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime, const d
 
         if (it == "thl_tend_micro")
             dump.save_dump(fields.sd.at("thl_tend_micro")->fld.data(), "thl_tend_micro", iotime);
+
+        if (it == "qt_tend_micro")
+            dump.save_dump(fields.sd.at("qt_tend_micro")->fld.data(), "qt_tend_micro", iotime);
     }
 }
 
