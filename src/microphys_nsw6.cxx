@@ -122,6 +122,548 @@ namespace
     using namespace Fast_math;
     using Micro_2mom_warm_functions::minmod;
 
+    // Constants of the conversion terms at one height level.
+    template<typename TF>
+    struct Conversion_constants
+    {
+        TF lambda_fac_r;
+        TF lambda_fac_s;
+        TF lambda_fac_g;
+        TF V_T_fac_r_k;
+        TF V_T_fac_s_k;
+        TF V_T_fac_g_k;
+        TF fac_iacr;
+        TF fac_raci;
+        TF fac_racw;
+        TF fac_sacw;
+        TF fac_saci;
+        TF fac_gacw;
+        TF fac_gaci;
+        TF fac_racs0;
+        TF fac_sacr0;
+        TF fac_gacr0;
+        TF fac_gacs0;
+        TF g_s1;
+        TF g_s2;
+        TF g_s3;
+        TF g_r1;
+        TF g_r2;
+        TF g_r3;
+        TF vent_1r;
+        TF vent_1s;
+        TF vent_1g;
+        TF vent_2r;
+        TF vent_2s;
+        TF vent_2g;
+        TF fac_raut;
+        TF rho_k;
+        TF rho_i;
+        TF exner_k;
+        TF p_k;
+    };
+
+    // Process rates and tendencies of nb compacted cells at one height level.
+    template<typename TF>
+    void conversion_block(
+            TF* const restrict dqr_c, TF* const restrict dqs_c, TF* const restrict dqg_c,
+            TF* const restrict dqt_c, TF* const restrict dthl_c, TF* const restrict frz_c,
+            const TF* const restrict qr_c, const TF* const restrict qs_c, const TF* const restrict qg_c,
+            const TF* const restrict ql_c, const TF* const restrict qi_c,
+            const TF* const restrict qt_c, const TF* const restrict thl_c,
+            const Conversion_constants<TF> cst, const TF dt, const int nb)
+    {
+        const TF lambda_fac_r = cst.lambda_fac_r;
+        const TF lambda_fac_s = cst.lambda_fac_s;
+        const TF lambda_fac_g = cst.lambda_fac_g;
+        const TF V_T_fac_r_k = cst.V_T_fac_r_k;
+        const TF V_T_fac_s_k = cst.V_T_fac_s_k;
+        const TF V_T_fac_g_k = cst.V_T_fac_g_k;
+        const TF fac_iacr = cst.fac_iacr;
+        const TF fac_raci = cst.fac_raci;
+        const TF fac_racw = cst.fac_racw;
+        const TF fac_sacw = cst.fac_sacw;
+        const TF fac_saci = cst.fac_saci;
+        const TF fac_gacw = cst.fac_gacw;
+        const TF fac_gaci = cst.fac_gaci;
+        const TF fac_racs0 = cst.fac_racs0;
+        const TF fac_sacr0 = cst.fac_sacr0;
+        const TF fac_gacr0 = cst.fac_gacr0;
+        const TF fac_gacs0 = cst.fac_gacs0;
+        const TF g_s1 = cst.g_s1;
+        const TF g_s2 = cst.g_s2;
+        const TF g_s3 = cst.g_s3;
+        const TF g_r1 = cst.g_r1;
+        const TF g_r2 = cst.g_r2;
+        const TF g_r3 = cst.g_r3;
+        const TF vent_1r = cst.vent_1r;
+        const TF vent_1s = cst.vent_1s;
+        const TF vent_1g = cst.vent_1g;
+        const TF vent_2r = cst.vent_2r;
+        const TF vent_2s = cst.vent_2s;
+        const TF vent_2g = cst.vent_2g;
+        const TF fac_raut = cst.fac_raut;
+        const TF rho_k = cst.rho_k;
+        const TF rho_i = cst.rho_i;
+        const TF exner_k = cst.exner_k;
+        const TF p_k = cst.p_k;
+
+        // Process rates and the state after one microphysics time step.
+        #pragma GCC ivdep
+        for (int n=0; n<nb; ++n)
+        {
+            // T from thlE with known ql and qi: positive root of T^2 - tl*T - tl*A = 0, A = (Lv*ql + Ls*qi)/cp.
+            const TF tl = exner_k*thl_c[n];
+            const TF A  = (Lv<TF>*ql_c[n] + Ls<TF>*qi_c[n]) / cp<TF>;
+            const TF T  = TF(0.5) * (tl + std::sqrt(tl*tl + TF(4.)*tl*A));
+            const TF qv = qt_c[n] - ql_c[n] - qi_c[n];
+
+            // Flag the sign of the absolute temperature.
+            const TF T_pos = TF(T >= T0<TF>);
+            const TF T_neg = TF(1.) - T_pos;
+
+            // Check which species are present.
+            const bool has_vapor   = (qv      > qv_min<TF>);
+            const bool has_liq     = (ql_c[n] > ql_min<TF>);
+            const bool has_ice     = (qi_c[n] > qi_min<TF>);
+            const bool has_rain    = (qr_c[n] > qr_min<TF>);
+            const bool has_snow    = (qs_c[n] > qs_min<TF>);
+            const bool has_graupel = (qg_c[n] > qg_min<TF>);
+
+            // Tomita Eq. 27. Use 1/lambda: powers of lambda overflow in single precision for small q; powers of 1/lambda underflow to 0.
+            const TF lambda_r_i = std::sqrt(std::sqrt(rho_k * (qr_c[n] + q_tiny<TF>) * lambda_fac_r));
+            const TF lambda_s_i = std::sqrt(std::sqrt(rho_k * (qs_c[n] + q_tiny<TF>) * lambda_fac_s));
+            const TF lambda_g_i = std::sqrt(std::sqrt(rho_k * (qg_c[n] + q_tiny<TF>) * lambda_fac_g));
+
+            // Fractional powers of 1/lambda.
+            const TF lr_12 = std::sqrt(lambda_r_i);
+            const TF lr_14 = std::sqrt(lr_12);
+            const TF ls_12 = std::sqrt(lambda_s_i);
+            const TF ls_14 = std::sqrt(ls_12);
+            const TF ls_18 = std::sqrt(ls_14);
+            const TF lg_12 = std::sqrt(lambda_g_i);
+            const TF lg_14 = std::sqrt(lg_12);
+
+            const TF lr_2 = pow2(lambda_r_i);
+            const TF lr_3 = lr_2 * lambda_r_i;
+            const TF lr_4 = pow2(lr_2);
+            const TF lr_5 = lr_4 * lambda_r_i;
+            const TF lr_6 = lr_3 * lr_3;
+            const TF ls_2 = pow2(lambda_s_i);
+            const TF ls_3 = ls_2 * lambda_s_i;
+            const TF ls_4 = pow2(ls_2);
+            const TF ls_5 = ls_4 * lambda_s_i;
+            const TF ls_6 = ls_3 * ls_3;
+            const TF lg_2 = pow2(lambda_g_i);
+            const TF lg_3 = lg_2 * lambda_g_i;
+
+            // Tomita Eq. 28
+            const TF V_Tr = !(has_rain)    ? TF(0.) : V_T_fac_r_k * lr_12;
+            const TF V_Ts = !(has_snow)    ? TF(0.) : V_T_fac_s_k * ls_14;
+            const TF V_Tg = !(has_graupel) ? TF(0.) : V_T_fac_g_k * lg_12;
+
+            // ACCRETION
+            // Tomita Eq. 29
+            const TF P_iacr = !(has_rain && has_ice) ? TF(0.) :
+                fac_iacr * lr_6 * lr_12 * qi_c[n];
+
+            // Tomita Eq. 30
+            const TF delta_1 = TF(qr_c[n] >= TF(1.e-4));
+
+            // Tomita Eq. 31
+            TF P_iacr_s = (TF(1.) - delta_1) * P_iacr;
+            TF P_iacr_g = delta_1 * P_iacr;
+
+            // Tomita Eq. 32
+            const TF P_raci = !(has_rain && has_ice) ? TF(0.) :
+                fac_raci * lr_3 * lr_12 * qi_c[n];
+
+            // Tomita Eq. 33
+            TF P_raci_s = (TF(1.) - delta_1) * P_raci;
+            TF P_raci_g = delta_1 * P_raci;
+
+            // Tomita Eq. 34, 35
+            TF P_racw = !(has_liq && has_rain) ? TF(0.) :
+                fac_racw * lr_3 * lr_12 * ql_c[n];
+            TF P_sacw = !(has_liq && has_snow) ? TF(0.) :
+                fac_sacw * ls_3 * ls_14 * ql_c[n];
+
+            // Tomita Eq. 39
+            const TF E_si = std::exp(gamma_sacr<TF> * (T - T0<TF>));
+
+            // Tomita Eq. 36 - 38
+            TF P_saci = !(has_snow && has_ice) ? TF(0.) :
+                fac_saci * E_si * ls_3 * ls_14 * qi_c[n];
+            TF P_gacw = !(has_graupel && has_liq) ? TF(0.) :
+                fac_gacw * lg_3 * lg_12 * ql_c[n];
+            TF P_gaci = !(has_graupel && has_ice) ? TF(0.) :
+                fac_gaci * lg_3 * lg_12 * qi_c[n];
+
+            // Accretion of falling hydrometeors.
+            // Tomita Eq. 42
+            const TF delta_2 = ( (qr_c[n] >= TF(1.e-4)) || (qs_c[n] >= TF(1.e-4)) ) ? TF(0.) : TF(1.);
+
+            // Tomita Eq. 41
+            TF P_racs = !(has_rain && has_snow) ? TF(0.) :
+                (TF(1.) - delta_2)
+                * fac_racs0 * std::abs(V_Tr - V_Ts) * rho_i
+                * ( g_s3 * ls_6 * lambda_r_i
+                  + g_s2 * ls_5 * lr_2
+                  + g_s1 * ls_4 * lr_3 );
+
+            // Tomita Eq. 44
+            const TF P_sacr = !(has_snow && has_rain) ? TF(0.) :
+                  fac_sacr0 * std::abs(V_Ts - V_Tr) * rho_i
+                * ( g_r1 * lr_4 * ls_3
+                  + g_r2 * lr_5 * ls_2
+                  + g_r3 * lr_6 * lambda_s_i );
+
+            // Tomita Eq. 43
+            TF P_sacr_g = (TF(1.) - delta_2) * P_sacr;
+            TF P_sacr_s = delta_2 * P_sacr;
+
+            // Tomita Eq. 49
+            const TF E_gs = std::min( TF(1.), std::exp(gamma_gacs<TF> * (T - T0<TF>)) );
+
+            // Tomita Eq. 47
+            TF P_gacr = !(has_graupel && has_rain) ? TF(0.) :
+                  fac_gacr0 * std::abs(V_Tg - V_Tr) * rho_i
+                * ( g_r1 * lr_4 * lg_3
+                  + g_r2 * lr_5 * lg_2
+                  + g_r3 * lr_6 * lambda_g_i );
+
+            // Tomita Eq. 48
+            TF P_gacs = !(has_graupel && has_snow) ? TF(0.) :
+                  fac_gacs0 * std::abs(V_Tg - V_Ts) * E_gs * rho_i
+                * ( g_s1 * ls_4 * lg_3
+                  + g_s2 * ls_5 * lg_2
+                  + g_s3 * ls_6 * lambda_g_i );
+
+            // AUTOCONVERSION.
+            constexpr TF q_icrt = TF(0.);
+            constexpr TF q_scrt = TF(6.e-4);
+
+            // Tomita Eq. 53
+            const TF beta_1 = std::min( beta_saut<TF>, beta_saut<TF>*std::exp(gamma_saut<TF> * (T - T0<TF>)) );
+
+            // Tomita Eq. 54
+            const TF beta_2 = std::min( beta_gaut<TF>, beta_gaut<TF>*std::exp(gamma_gaut<TF> * (T - T0<TF>)) );
+
+//                    // Tomita Eq. 50. Our Nc0 is SI units, so conversion is applied.
+//                    TF P_raut = !(has_liq) ? TF(0.) :
+//                        TF(16.7)/rho_k * pow2(rho_k*ql_c[n]) / (TF(5.) + TF(3.66e-2) * TF(1.e-6)*Nc0 / (D_d*rho_k*ql_c[n]));
+
+             // Kharoutdinov and Kogan autoconversion.
+             TF P_raut = (has_liq) ?
+                 fac_raut * std::pow(ql_c[n], TF(2.47))
+                 : TF(0.);
+
+            // Seifert and Beheng autoconversion.
+            // const TF x_star = TF(2.6e-10); // SB06, list of symbols, same as UCLA-LES
+            // const TF k_cc = TF(9.44e9); // UCLA-LES (Long, 1974), 4.44e9 in SB06, p48
+            // const TF nu_c = TF(1.); // SB06, Table 1., same as UCLA-LES
+            // const TF kccxs = k_cc / (TF(20.) * x_star) * (nu_c+2)*(nu_c+4) / pow2(nu_c+1);
+            // const TF xc  = rho_k * ql_c[n] / Nc0; // Mean mass of cloud drops [kg]
+            // const TF tau = TF(1.) - ql_c[n] / (ql_c[n] + qr_c[n] + dsmall); // SB06, Eq 5
+            // const TF phi_au = TF(600.) * std::pow(tau, TF(0.68)) * pow3(TF(1.) - pow(tau, TF(0.68))); // UCLA-LES
+
+            // TF P_raut = rho_k * kccxs * pow(ql_c[n], 2) * pow(xc, 2) * (TF(1.) + phi_au / pow2(TF(1.)-tau)); // SB06, eq 4
+
+            // Tomita Eq. 52
+            TF P_saut = !(has_ice) ? TF(0.) :
+                std::max(beta_1*(qi_c[n] - q_icrt), TF(0.));
+
+            // Tomita Eq. 54
+            TF P_gaut = !(has_snow) ? TF(0.) :
+                std::max(beta_2*(qs_c[n] - q_scrt), TF(0.));
+
+            // PHASE CHANGES.
+            const TF esl = esat_liq(T);
+            const TF esi = esat_ice(T);
+
+            // Tomita Eq. 57
+            const TF G_w = TF(1.) / (
+                Lv<TF> / (K_a<TF> * T) * (Lv<TF> / (Rv<TF> * T) - TF(1.))
+                + Rv<TF>*T / (K_d<TF> * esl) );
+
+            // Tomita Eq. 62
+            const TF G_i = TF(1.) / (
+                Ls<TF> / (K_a<TF> * T) * (Ls<TF> / (Rv<TF> * T) - TF(1.))
+                + Rv<TF>*T / (K_d<TF> * esi) );
+
+            // qsat_liq and qsat_ice, reusing esat.
+            const TF qsl = ep<TF>*esl / (p_k - (TF(1.)-ep<TF>)*esl);
+            const TF qsi = ep<TF>*esi / (p_k - (TF(1.)-ep<TF>)*esi);
+
+            const TF S_w = qv / qsl;
+            const TF S_i = qv / qsi;
+
+            // Tomita Eq. 63
+            const TF delta_3 = TF(S_i <= TF(1.)); // Subsaturated, then delta_3 = 1.
+
+            // Ventilation terms of rain, snow and graupel.
+            const TF vent_r = vent_1r * lr_2 + vent_2r * lr_2 * lr_12 * lr_14;
+            const TF vent_s = vent_1s * ls_2 + vent_2s * ls_2 * ls_12 * ls_18;
+            const TF vent_g = vent_1g * lg_2 + vent_2g * lg_2 * lg_12 * lg_14;
+
+            // Tomita Eq. 59
+            TF P_revp = !(has_rain) ? TF(0.) :
+                - TF(2.)*pi<TF> * N_0r<TF> * (std::min(S_w, TF(1.)) - TF(1.)) * G_w * rho_i * vent_r;
+
+            // Tomita Eq. 60. Negative for sublimation, positive for deposition.
+            const TF P_sdep_ssub =
+                TF(2.)*pi<TF> * N_0s<TF> * (S_i - TF(1.)) * G_i * rho_i * vent_s;
+
+            // Tomita Eq. 51
+            const TF P_gdep_gsub =
+                TF(2.)*pi<TF> * N_0g<TF> * (S_i - TF(1.)) * G_i * rho_i * vent_g;
+
+            // Tomita Eq. 64
+            TF P_sdep = !(has_vapor) ? TF(0.) :
+                (TF(1.) - delta_3) * P_sdep_ssub;
+            TF P_gdep = !(has_vapor) ? TF(0.) :
+                (TF(1.) - delta_3) * P_gdep_gsub;
+
+            // Tomita Eq. 65
+            // CvH: I swapped the sign with respect to Tomita, the term should be positive.
+            TF P_ssub = !(has_snow) ? TF(0.) :
+                - delta_3 * P_sdep_ssub;
+            TF P_gsub = !(has_graupel) ? TF(0.) :
+                - delta_3 * P_gdep_gsub;
+
+            // Freezing and melting
+            // Tomita Eq. 67, 68 combined.
+            TF P_smlt = !(has_snow) ? TF(0.) :
+                TF(2.)*pi<TF> * K_a<TF> * (T - T0<TF>) * N_0s<TF> * rho_i / Lf<TF> * vent_s
+                + C_l<TF> * (T - T0<TF>) / Lf<TF> * (P_sacw + P_sacr);
+
+            // Tomita Eq. 69
+            TF P_gmlt = !(has_graupel) ? TF(0.) :
+                TF(2.)*pi<TF> * K_a<TF> * (T - T0<TF>) * N_0g<TF> * rho_i / Lf<TF> * vent_g
+                + C_l<TF> * (T - T0<TF>) / Lf<TF> * (P_gacw + P_gacr);
+
+            // Tomita Eq. 70
+            constexpr TF A_prime = TF(0.66);
+            constexpr TF B_prime = TF(100.);
+
+            TF P_gfrz = !(has_rain) ? TF(0.) :
+                TF(20.) * pi_2<TF> * B_prime * N_0r<TF> * rho_w<TF> * rho_i
+                * (std::exp(A_prime * (T0<TF> - T)) - TF(1.)) * pow7(lambda_r_i);
+
+            // COMPUTE THE TENDENCIES.
+            // Limit the production terms to avoid instability.
+            auto limit_tend = [&](TF& tend, const TF tend_limit)
+            {
+                tend = std::max(TF(0.), std::min(tend, tend_limit));
+            };
+
+            const TF dqv_dt_max = qv      / dt;
+            const TF dqi_dt_max = qi_c[n] / dt;
+            const TF dql_dt_max = ql_c[n] / dt;
+            const TF dqr_dt_max = qr_c[n] / dt;
+            const TF dqs_dt_max = qs_c[n] / dt;
+            const TF dqg_dt_max = qg_c[n] / dt;
+
+            // Limit on the availability of the source.
+            // Limit accretion terms.
+            limit_tend(P_iacr_s, dqr_dt_max);
+            limit_tend(P_iacr_g, dqr_dt_max);
+            limit_tend(P_raci_s, dqi_dt_max);
+            limit_tend(P_raci_g, dqi_dt_max);
+            limit_tend(P_racw  , dql_dt_max);
+            limit_tend(P_sacw  , dql_dt_max);
+            limit_tend(P_saci  , dqi_dt_max);
+            limit_tend(P_gacw  , dql_dt_max);
+            limit_tend(P_gaci  , dqi_dt_max);
+            limit_tend(P_racs  , dqs_dt_max);
+            limit_tend(P_sacr_s, dqr_dt_max);
+            limit_tend(P_sacr_g, dqr_dt_max);
+            limit_tend(P_gacr  , dqr_dt_max);
+            limit_tend(P_gacs  , dqs_dt_max);
+
+            // Limit autoconversion terms.
+            limit_tend(P_raut, dql_dt_max);
+            limit_tend(P_saut, dqi_dt_max);
+            limit_tend(P_gaut, dqs_dt_max);
+
+            // Limit phase changes.
+            limit_tend(P_revp, dqr_dt_max);
+            limit_tend(P_sdep, dqv_dt_max);
+            limit_tend(P_ssub, dqs_dt_max);
+            limit_tend(P_gdep, dqv_dt_max);
+            limit_tend(P_gsub, dqg_dt_max);
+            limit_tend(P_smlt, dqs_dt_max);
+            limit_tend(P_gmlt, dqg_dt_max);
+            limit_tend(P_gfrz, dqr_dt_max);
+
+            // P_iacr_s = 0;
+            // P_iacr_g = 0;
+            // P_raci_s = 0;
+            // P_raci_g = 0;
+            // P_racw   = 0;
+            // P_sacw   = 0;
+            // P_saci   = 0;
+            // P_gacw   = 0;
+            // P_gaci   = 0;
+            // P_racs   = 0;
+            // P_sacr_s = 0;
+            // P_sacr_g = 0;
+            // P_gacr   = 0;
+            // P_gacs   = 0;
+
+            // P_raut = 0;
+            // P_saut = 0;
+            // P_gaut = 0;
+
+            // P_revp = 0;
+            // P_sdep = 0;
+            // P_ssub = 0;
+            // P_gdep = 0;
+            // P_gsub = 0;
+            // P_smlt = 0;
+            // P_gmlt = 0;
+            // P_gfrz = 0;
+
+            // MT: for the * T_pos and * T_neg I followed the table in the SCALE documentation.
+            // I assumed that has_ice already guarantees negative temperatures.
+            TF vapor_to_snow = P_sdep;
+            TF vapor_to_graupel = P_gdep;
+
+            TF cloud_to_rain = P_racw + P_sacw * T_pos + P_raut + P_gacw * T_pos;
+            TF cloud_to_graupel = P_gacw * T_neg;
+            TF cloud_to_snow = P_sacw * T_neg;
+
+            TF rain_to_vapor = P_revp;
+            TF rain_to_graupel = P_gacr * T_neg + P_iacr_g + P_sacr_g * T_neg + P_gfrz * T_neg;
+            TF rain_to_snow = P_sacr_s * T_neg + P_iacr_s;
+
+            TF ice_to_snow = P_raci_s + P_saci + P_saut;
+            TF ice_to_graupel = P_raci_g + P_gaci;
+
+            TF snow_to_graupel = P_gacs + P_racs * T_neg + P_gaut * T_neg;
+            TF snow_to_rain = P_smlt * T_pos;
+            TF snow_to_vapor = P_ssub;
+
+            TF graupel_to_rain = P_gmlt * T_pos;
+            TF graupel_to_vapor = P_gsub;
+
+            const TF dqv_dt =
+                - vapor_to_snow - vapor_to_graupel + snow_to_vapor + graupel_to_vapor + rain_to_vapor;
+
+            const TF dql_dt =
+                - cloud_to_rain - cloud_to_graupel - cloud_to_snow;
+
+            const TF dqi_dt =
+                - ice_to_snow - ice_to_graupel;
+
+            const TF dqr_dt =
+                + cloud_to_rain + snow_to_rain + graupel_to_rain
+                - rain_to_vapor - rain_to_graupel - rain_to_snow;
+
+            const TF dqs_dt =
+                + cloud_to_snow + ice_to_snow + vapor_to_snow
+                - snow_to_graupel - snow_to_vapor - snow_to_rain + rain_to_snow;
+
+            const TF dqg_dt =
+                + cloud_to_graupel + rain_to_graupel + ice_to_graupel
+                + vapor_to_graupel + snow_to_graupel
+                - graupel_to_rain - graupel_to_vapor;
+
+            // Limit the production terms to avoid instability.
+            auto limit_factor = [](const TF tend, const TF tend_limit)
+            {
+                return (tend < TF(0.)) ? std::min(-tend_limit/tend, TF(1.)) : TF(1.);
+            };
+
+            const TF dqv_dt_fac = limit_factor(dqv_dt, dqv_dt_max);
+            const TF dql_dt_fac = limit_factor(dql_dt, dql_dt_max);
+            const TF dqi_dt_fac = limit_factor(dqi_dt, dqi_dt_max);
+            const TF dqr_dt_fac = limit_factor(dqr_dt, dqr_dt_max);
+            const TF dqs_dt_fac = limit_factor(dqs_dt, dqs_dt_max);
+            const TF dqg_dt_fac = limit_factor(dqg_dt, dqg_dt_max);
+
+            vapor_to_snow    *= dqv_dt_fac * dqs_dt_fac;
+            vapor_to_graupel *= dqv_dt_fac * dqg_dt_fac;
+
+            cloud_to_rain    *= dql_dt_fac * dqr_dt_fac;
+            cloud_to_graupel *= dql_dt_fac * dqg_dt_fac;
+            cloud_to_snow    *= dql_dt_fac * dqs_dt_fac;
+
+            rain_to_vapor    *= dqr_dt_fac * dqv_dt_fac;
+            rain_to_graupel  *= dqr_dt_fac * dqg_dt_fac;
+            rain_to_snow     *= dqr_dt_fac * dqs_dt_fac;
+
+            ice_to_snow      *= dqi_dt_fac * dqs_dt_fac;
+            ice_to_graupel   *= dqi_dt_fac * dqg_dt_fac;
+
+            snow_to_graupel  *= dqs_dt_fac * dqg_dt_fac;
+            snow_to_vapor    *= dqs_dt_fac * dqv_dt_fac;
+            snow_to_rain     *= dqs_dt_fac * dqr_dt_fac;
+
+            graupel_to_rain  *= dqg_dt_fac * dqr_dt_fac;
+            graupel_to_vapor *= dqg_dt_fac * dqv_dt_fac;
+
+            frz_c[n] =
+                  cloud_to_graupel + cloud_to_snow + rain_to_graupel + rain_to_snow
+                + vapor_to_snow + vapor_to_graupel
+                - snow_to_rain - graupel_to_rain - snow_to_vapor - graupel_to_vapor;
+
+            /* Conversion of the process rates to thl and qt tendencies (thlE).
+             * thlE is not linear in T, ql and qi, so the thl tendency cannot be summed per process
+             * (thlD: thlt += L/(cp*exner) * rate). Instead:
+             *   1. accumulate the changes in cloud liquid (dqc), cloud ice (dqi) and vapor (dqv),
+             *   2. compute the latent heating dT of all phase changes at constant cp,
+             *   3. convert T_end, qc_end, qi_end to thl_end with thlE, and
+             *   4. thlt += (thl_end - thl) / dt and qtt += dqc + dqi + dqv.
+             * Precipitation (qr, qs, qg) is not part of thl or qt; their tendencies are added directly.
+             */
+            const TF dqc = - cloud_to_rain - cloud_to_graupel - cloud_to_snow;
+            const TF dqi = - ice_to_snow - ice_to_graupel;
+            const TF dqv = - vapor_to_snow - vapor_to_graupel + rain_to_vapor + snow_to_vapor + graupel_to_vapor;
+
+            dqr_c[n] =
+                + cloud_to_rain - rain_to_vapor - rain_to_graupel - rain_to_snow
+                + snow_to_rain + graupel_to_rain;
+            dqs_c[n] =
+                + vapor_to_snow + cloud_to_snow + rain_to_snow + ice_to_snow
+                - snow_to_graupel - snow_to_vapor - snow_to_rain;
+            dqg_c[n] =
+                + vapor_to_graupel + cloud_to_graupel + rain_to_graupel + ice_to_graupel
+                + snow_to_graupel - graupel_to_rain - graupel_to_vapor;
+            dqt_c[n] = dqc + dqi + dqv;
+
+            // State after one time step of the microphysics.
+            const TF qc_end = ql_c[n] + dqc * dt;
+            const TF qi_end = qi_c[n] + dqi * dt;
+
+            // Latent heating [K s-1] of all phase changes, with constant Lv/Ls/Lf and cp (consistent with thlE).
+            // Transfers within one phase (cloud_to_rain, ice_to_snow, ...) do not change T.
+            const TF dT =   - Lv<TF> / cp<TF> * rain_to_vapor
+                            - Ls<TF> / cp<TF> * snow_to_vapor
+                            - Ls<TF> / cp<TF> * graupel_to_vapor
+                            + Lf<TF> / cp<TF> * cloud_to_snow
+                            + Lf<TF> / cp<TF> * cloud_to_graupel
+                            - Lf<TF> / cp<TF> * snow_to_rain
+                            - Lf<TF> / cp<TF> * graupel_to_rain
+                            + Lf<TF> / cp<TF> * rain_to_snow
+                            + Lf<TF> / cp<TF> * rain_to_graupel
+                            + Ls<TF> / cp<TF> * vapor_to_graupel
+                            + Ls<TF> / cp<TF> * vapor_to_snow;
+
+            const TF T_end = T + dT * dt;
+
+            // Convert the start and end state to thl: thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)).
+            // The start state is recomputed from T instead of using thl, such that cells without
+            // conversions get an exactly zero tendency instead of the round-off of the T inversion.
+            const TF thl_start = T/exner_k / (1 + Lv<TF>*ql_c[n]/(cp<TF> * T)
+                                                + Ls<TF>*qi_c[n]/(cp<TF> * T));
+            const TF thl_end = T_end/exner_k / (1 + Lv<TF>*qc_end/(cp<TF> * T_end)
+                                                   + Ls<TF>*qi_end/(cp<TF> * T_end));
+
+            // Tendencies of the conserved variables.
+            dthl_c[n] = (thl_end - thl_start)/dt;
+        }
+    }
+
     // Compute all microphysical tendencies.
     template<typename TF>
     void conversion(
@@ -143,581 +685,211 @@ namespace
         // Tomita Eq. 51. Nc0 is converted from SI units (m-3 instead of cm-3).
         const TF D_d = TF(0.146) - TF(5.964e-2)*std::log((Nc0*TF(1.e-6)) / TF(2.e3));
 
+        // The powers of lambda below are written out for these exponents.
+        static_assert(b_r<TF> == TF(3.) && b_s<TF> == TF(3.) && b_g<TF> == TF(3.), "nsw6 assumes b = 3");
+        static_assert(d_r<TF> == TF(0.5) && d_s<TF> == TF(0.25) && d_g<TF> == TF(0.5), "nsw6 assumes d_r = d_g = 0.5, d_s = 0.25");
+
+        // Tomita Eq. 27: 1/lambda = (rho*q / (a*N_0*gamma(b+1)))^(1/(b+1)).
+        const TF lambda_fac_r = TF(1.) / (a_r<TF> * N_0r<TF> * std::tgamma(b_r<TF> + TF(1.)));
+        const TF lambda_fac_s = TF(1.) / (a_s<TF> * N_0s<TF> * std::tgamma(b_s<TF> + TF(1.)));
+        const TF lambda_fac_g = TF(1.) / (a_g<TF> * N_0g<TF> * std::tgamma(b_g<TF> + TF(1.)));
+
+        // Tomita Eq. 28, without the density correction.
+        const TF V_T_fac_r = c_r<TF> * std::tgamma(b_r<TF> + d_r<TF> + TF(1.)) / std::tgamma(b_r<TF> + TF(1.));
+        const TF V_T_fac_s = c_s<TF> * std::tgamma(b_s<TF> + d_s<TF> + TF(1.)) / std::tgamma(b_s<TF> + TF(1.));
+        const TF V_T_fac_g = c_g<TF> * std::tgamma(b_g<TF> + d_g<TF> + TF(1.)) / std::tgamma(b_g<TF> + TF(1.));
+
+        // Tomita Eq. 29, 32 - 38, without the density correction.
+        const TF fac_iacr0 = pi_2<TF> * E_ri<TF> * N_0r<TF> * c_r<TF> * rho_w<TF> * std::tgamma(TF(6.) + d_r<TF>) / (TF(24.) * M_i<TF>);
+        const TF fac_raci0 = pi<TF> * E_ri<TF> * N_0r<TF> * c_r<TF> * std::tgamma(TF(3.) + d_r<TF>) / TF(4.);
+        const TF fac_racw0 = pi<TF> * E_rw<TF> * N_0r<TF> * c_r<TF> * std::tgamma(TF(3.) + d_r<TF>) / TF(4.);
+        const TF fac_sacw0 = pi<TF> * E_sw<TF> * N_0s<TF> * c_s<TF> * std::tgamma(TF(3.) + d_s<TF>) / TF(4.);
+        const TF fac_saci0 = pi<TF> * N_0s<TF> * c_s<TF> * std::tgamma(TF(3.) + d_s<TF>) / TF(4.);
+        const TF fac_gacw0 = pi<TF> * E_gw<TF> * N_0g<TF> * c_g<TF> * std::tgamma(TF(3.) + d_g<TF>) / TF(4.);
+        const TF fac_gaci0 = pi<TF> * E_gi<TF> * N_0g<TF> * c_g<TF> * std::tgamma(TF(3.) + d_g<TF>) / TF(4.);
+
+        // Tomita Eq. 41, 44, 47, 48, without the 1/rho and E_gs.
+        const TF fac_racs0 = pi<TF> * a_s<TF> * E_sr<TF> * N_0s<TF> * N_0r<TF> / TF(4.);
+        const TF fac_sacr0 = pi<TF> * a_r<TF> * E_sr<TF> * N_0r<TF> * N_0s<TF> / TF(4.);
+        const TF fac_gacr0 = pi<TF> * a_r<TF> * E_gr<TF> * N_0g<TF> * N_0r<TF> / TF(4.);
+        const TF fac_gacs0 = pi<TF> * a_s<TF> * N_0g<TF> * N_0s<TF> / TF(4.);
+
+        // Gamma function weights of the collection integrals in Eq. 41, 44, 47, 48.
+        const TF g_s1 = std::tgamma(b_s<TF> + TF(1.)) * std::tgamma(TF(3.));
+        const TF g_s2 = TF(2.) * std::tgamma(b_s<TF> + TF(2.)) * std::tgamma(TF(2.));
+        const TF g_s3 = std::tgamma(b_s<TF> + TF(3.)) * std::tgamma(TF(1.));
+        const TF g_r1 = std::tgamma(b_r<TF> + TF(1.)) * std::tgamma(TF(3.));
+        const TF g_r2 = TF(2.) * std::tgamma(b_r<TF> + TF(2.)) * std::tgamma(TF(2.));
+        const TF g_r3 = std::tgamma(b_r<TF> + TF(3.)) * std::tgamma(TF(1.));
+
+        // Ventilation factors of Eq. 59, 60, 61, 67 - 69, without the density correction.
+        const TF vent_1r = f_1r<TF> * std::tgamma(TF(2.));
+        const TF vent_1s = f_1s<TF> * std::tgamma(TF(2.));
+        const TF vent_1g = f_1g<TF> * std::tgamma(TF(2.));
+        const TF vent_2r0 = f_2r<TF> * std::sqrt(c_r<TF> / nu<TF>) * std::tgamma(TF(0.5) * (TF(5.) + d_r<TF>));
+        const TF vent_2s0 = f_2s<TF> * std::sqrt(c_s<TF> / nu<TF>) * std::tgamma(TF(0.5) * (TF(5.) + d_s<TF>));
+        const TF vent_2g0 = f_2g<TF> * std::sqrt(c_g<TF> / nu<TF>) * std::tgamma(TF(0.5) * (TF(5.) + d_g<TF>));
+
+        // Kharoutdinov and Kogan autoconversion prefactor.
+        const TF fac_raut = TF(1350.) * std::pow(Nc0 * TF(1.e-6), TF(-1.79));
+
+        // Per height level, the cells that contain condensate or precipitation are compacted into
+        // a list, which is processed in blocks of contiguous arrays to allow vectorization.
+        constexpr int nblock = 256;
+        std::vector<int> index((iend-istart)*(jend-jstart));
+        std::vector<int> is_active_row(iend-istart);
+
+        enum Block_vars {
+            qr_b, qs_b, qg_b, ql_b, qi_b, qt_b, thl_b,
+            dqr_b, dqs_b, dqg_b, dqt_b, dthl_b, frz_b,
+            n_block_vars };
+
+        std::vector<TF> block_data(n_block_vars*nblock);
+        auto block = [&](const Block_vars v) { return block_data.data() + v*nblock; };
+
+        TF* const restrict qr_c  = block(qr_b);
+        TF* const restrict qs_c  = block(qs_b);
+        TF* const restrict qg_c  = block(qg_b);
+        TF* const restrict ql_c  = block(ql_b);
+        TF* const restrict qi_c  = block(qi_b);
+        TF* const restrict qt_c  = block(qt_b);
+        TF* const restrict thl_c = block(thl_b);
+
+        TF* const restrict dqr_c  = block(dqr_b);
+        TF* const restrict dqs_c  = block(dqs_b);
+        TF* const restrict dqg_c  = block(dqg_b);
+        TF* const restrict dqt_c  = block(dqt_b);
+        TF* const restrict dthl_c = block(dthl_b);
+        TF* const restrict frz_c  = block(frz_b);
+
         for (int k=kstart; k<kend; ++k)
         {
             const TF rho0_rho_sqrt = std::sqrt(rho[kstart]/rho[k]);
+            const TF rho0_rho_4th = std::sqrt(rho0_rho_sqrt);
+            const TF rho_k = rho[k];
+            const TF rho_i = TF(1.) / rho[k];
+            const TF exner_k = exner[k];
+            const TF p_k = p[k];
 
-            // Part of Tomita Eq. 29
-            const TF fac_iacr =
-                pi_2<TF> * E_ri<TF> * N_0r<TF> * c_r<TF> * rho_w<TF> * std::tgamma(TF(6.) + d_r<TF>)
-                / (TF(24.) * M_i<TF>)
-                * rho0_rho_sqrt;
+            const TF fac_iacr = fac_iacr0 * rho0_rho_sqrt;
+            const TF fac_raci = fac_raci0 * rho0_rho_sqrt;
+            const TF fac_racw = fac_racw0 * rho0_rho_sqrt;
+            const TF fac_sacw = fac_sacw0 * rho0_rho_sqrt;
+            const TF fac_saci = fac_saci0 * rho0_rho_sqrt;
+            const TF fac_gacw = fac_gacw0 * rho0_rho_sqrt;
+            const TF fac_gaci = fac_gaci0 * rho0_rho_sqrt;
 
-            // Part of Tomita Eq. 32
-            const TF fac_raci =
-                pi<TF> * E_ri<TF> * N_0r<TF> * c_r<TF> * std::tgamma(TF(3.) + d_r<TF>)
-                / TF(4.)
-                * rho0_rho_sqrt;
+            const TF V_T_fac_r_k = V_T_fac_r * rho0_rho_sqrt;
+            const TF V_T_fac_s_k = V_T_fac_s * rho0_rho_sqrt;
+            const TF V_T_fac_g_k = V_T_fac_g * rho0_rho_sqrt;
 
-            // Part of Tomita Eq. 34
-            const TF fac_racw =
-                pi<TF> * E_rw<TF> * N_0r<TF> * c_r<TF> * std::tgamma(TF(3.) + d_r<TF>)
-                / TF(4.)
-                * rho0_rho_sqrt;
+            const TF vent_2r = vent_2r0 * rho0_rho_4th;
+            const TF vent_2s = vent_2s0 * rho0_rho_4th;
+            const TF vent_2g = vent_2g0 * rho0_rho_4th;
 
-            // Part of Tomita Eq. 35
-            const TF fac_sacw =
-                pi<TF> * E_sw<TF> * N_0s<TF> * c_s<TF> * std::tgamma(TF(3.) + d_s<TF>)
-                / TF(4.)
-                * rho0_rho_sqrt;
+            const Conversion_constants<TF> cst = {
+                lambda_fac_r,
+                lambda_fac_s,
+                lambda_fac_g,
+                V_T_fac_r_k,
+                V_T_fac_s_k,
+                V_T_fac_g_k,
+                fac_iacr,
+                fac_raci,
+                fac_racw,
+                fac_sacw,
+                fac_saci,
+                fac_gacw,
+                fac_gaci,
+                fac_racs0,
+                fac_sacr0,
+                fac_gacr0,
+                fac_gacs0,
+                g_s1,
+                g_s2,
+                g_s3,
+                g_r1,
+                g_r2,
+                g_r3,
+                vent_1r,
+                vent_1s,
+                vent_1g,
+                vent_2r,
+                vent_2s,
+                vent_2g,
+                fac_raut,
+                rho_k,
+                rho_i,
+                exner_k,
+                p_k };
 
-            // Part of Tomita Eq. 36 (E_si is temperature dependent and missing therefore here).
-            const TF fac_saci =
-                pi<TF> * N_0s<TF> * c_s<TF> * std::tgamma(TF(3.) + d_s<TF>)
-                / TF(4.)
-                * rho0_rho_sqrt;
-
-            // Part of Tomita Eq. 37
-            const TF fac_gacw =
-                pi<TF> * E_gw<TF> * N_0g<TF> * c_g<TF> * std::tgamma(TF(3.) + d_g<TF>)
-                / TF(4.)
-                * rho0_rho_sqrt;
-
-            // Part of Tomita Eq. 38
-            const TF fac_gaci =
-                pi<TF> * E_gi<TF> * N_0g<TF> * c_g<TF> * std::tgamma(TF(3.) + d_g<TF>)
-                / TF(4.)
-                * rho0_rho_sqrt;
-
+            // Compact the cells with condensate or precipitation.
+            int n_cells = 0;
             for (int j=jstart; j<jend; ++j)
+            {
+                // Flag the active cells of one row in a vectorizable loop, then compact the row.
                 #pragma ivdep
                 for (int i=istart; i<iend; ++i)
                 {
                     const int ijk = i + j*jj + k*kk;
-
-                    // T from thlE with known ql and qi: positive root of T^2 - tl*T - tl*A = 0, A = (Lv*ql + Ls*qi)/cp.
-                    const TF tl = exner[k]*thl[ijk];
-                    const TF A  = (Lv<TF>*ql[ijk] + Ls<TF>*qi[ijk]) / cp<TF>;
-                    const TF T  = TF(0.5) * (tl + std::sqrt(tl*tl + TF(4.)*tl*A));
-                    const TF qv = qt[ijk] - ql[ijk] - qi[ijk];
-
-                    // Flag the sign of the absolute temperature.
-                    const TF T_pos = TF(T >= T0<TF>);
-                    const TF T_neg = TF(1.) - T_pos;
-
-                    // Check which species are present.
-                    const bool has_vapor   = (qv      > qv_min<TF>);
-                    const bool has_liq     = (ql[ijk] > ql_min<TF>);
-                    const bool has_ice     = (qi[ijk] > qi_min<TF>);
-                    const bool has_rain    = (qr[ijk] > qr_min<TF>);
-                    const bool has_snow    = (qs[ijk] > qs_min<TF>);
-                    const bool has_graupel = (qg[ijk] > qg_min<TF>);
-
-                    if (! (has_liq || has_ice || has_rain || has_snow || has_graupel) )
-                        continue;
-
-                    // Tomita Eq. 27
-                    const TF lambda_r = std::pow(
-                            a_r<TF> * N_0r<TF> * std::tgamma(b_r<TF> + TF(1.))
-                            / (rho[k] * (qr[ijk] + q_tiny<TF>)),
-                            TF(1.) / (b_r<TF> + TF(1.)) );
-
-                    const TF lambda_s = std::pow(
-                            a_s<TF> * N_0s<TF> * std::tgamma(b_s<TF> + TF(1.))
-                            / (rho[k] * (qs[ijk] + q_tiny<TF>)),
-                            TF(1.) / (b_s<TF> + TF(1.)) );
-
-                    const TF lambda_g = std::pow(
-                            a_g<TF> * N_0g<TF> * std::tgamma(b_g<TF> + TF(1.))
-                            / (rho[k] * (qg[ijk] + q_tiny<TF>)),
-                            TF(1.) / (b_g<TF> + TF(1.)) );
-
-                    // Use 1/lambda: powers of lambda overflow in single precision for small q; powers of 1/lambda underflow to 0.
-                    const TF lambda_r_i = TF(1.) / lambda_r;
-                    const TF lambda_s_i = TF(1.) / lambda_s;
-                    const TF lambda_g_i = TF(1.) / lambda_g;
-
-                    // Tomita Eq. 28
-                    const TF V_Tr = !(has_rain) ? TF(0.) :
-                        c_r<TF> * rho0_rho_sqrt
-                        * std::tgamma(b_r<TF> + d_r<TF> + TF(1.)) / std::tgamma(b_r<TF> + TF(1.))
-                        * std::pow(lambda_r, -d_r<TF>);
-
-                    const TF V_Ts = !(has_snow) ? TF(0.) :
-                        c_s<TF> * rho0_rho_sqrt
-                        * std::tgamma(b_s<TF> + d_s<TF> + TF(1.)) / std::tgamma(b_s<TF> + TF(1.))
-                        * std::pow(lambda_s, -d_s<TF>);
-
-                    const TF V_Tg = !(has_graupel) ? TF(0.) :
-                        c_g<TF> * rho0_rho_sqrt
-                        * std::tgamma(b_g<TF> + d_g<TF> + TF(1.)) / std::tgamma(b_g<TF> + TF(1.))
-                        * std::pow(lambda_g, -d_g<TF>);
-
-                    // ACCRETION
-                    // Tomita Eq. 29
-                    const TF P_iacr = !(has_rain && has_ice) ? TF(0.) :
-                        fac_iacr * std::pow(lambda_r_i, TF(6.) + d_r<TF>) * qi[ijk];
-
-                    // Tomita Eq. 30
-                    const TF delta_1 = TF(qr[ijk] >= TF(1.e-4));
-
-                    // Tomita Eq. 31
-                    TF P_iacr_s = (TF(1.) - delta_1) * P_iacr;
-                    TF P_iacr_g = delta_1 * P_iacr;
-
-                    // Tomita Eq. 32
-                    const TF P_raci = !(has_rain && has_ice) ? TF(0.) :
-                        fac_raci * std::pow(lambda_r_i, TF(3.) + d_r<TF>) * qi[ijk];
-
-                    // Tomita Eq. 33
-                    TF P_raci_s = (TF(1.) - delta_1) * P_raci;
-                    TF P_raci_g = delta_1 * P_raci;
-
-                    // Tomita Eq. 34, 35
-                    TF P_racw = !(has_liq && has_rain) ? TF(0.) :
-                        fac_racw * std::pow(lambda_r_i, TF(3.) + d_r<TF>) * ql[ijk];
-                    TF P_sacw = !(has_liq && has_snow) ? TF(0.) :
-                        fac_sacw * std::pow(lambda_s_i, TF(3.) + d_s<TF>) * ql[ijk];
-
-                    // Tomita Eq. 39
-                    const TF E_si = std::exp(gamma_sacr<TF> * (T - T0<TF>));
-
-                    // Tomita Eq. 36 - 38
-                    TF P_saci = !(has_snow && has_ice) ? TF(0.) :
-                        fac_saci * E_si * std::pow(lambda_s_i, TF(3.) + d_s<TF>) * qi[ijk];
-                    TF P_gacw = !(has_graupel && has_liq) ? TF(0.) :
-                        fac_gacw * std::pow(lambda_g_i, TF(3.) + d_g<TF>) * ql[ijk];
-                    TF P_gaci = !(has_graupel && has_ice) ? TF(0.) :
-                        fac_gaci * std::pow(lambda_g_i, TF(3.) + d_g<TF>) * qi[ijk];
-
-                    // Accretion of falling hydrometeors.
-                    // Tomita Eq. 42
-                    const TF delta_2 = TF(1.) - TF( (qr[ijk] >= TF(1.e-4)) || (qs[ijk] >= TF(1.e-4)) );
-
-                    // Tomita Eq. 41
-                    TF P_racs = !(has_rain && has_snow) ? TF(0.) :
-                        (TF(1.) - delta_2)
-                        * pi<TF> * a_s<TF> * std::abs(V_Tr - V_Ts) * E_sr<TF> * N_0s<TF> * N_0r<TF> / (TF(4.)*rho[k])
-                        * (          std::tgamma(b_s<TF> + TF(3.)) * std::tgamma(TF(1.)) * std::pow(lambda_s_i, b_s<TF> + TF(3.)) * lambda_r_i
-                          + TF(2.) * std::tgamma(b_s<TF> + TF(2.)) * std::tgamma(TF(2.)) * std::pow(lambda_s_i, b_s<TF> + TF(2.)) * pow2(lambda_r_i)
-                          +          std::tgamma(b_s<TF> + TF(1.)) * std::tgamma(TF(3.)) * std::pow(lambda_s_i, b_s<TF> + TF(1.)) * pow3(lambda_r_i) );
-
-                    // Tomita Eq. 44
-                    const TF P_sacr = !(has_snow && has_rain) ? TF(0.) :
-                          pi<TF> * a_r<TF> * std::abs(V_Ts - V_Tr) * E_sr<TF> * N_0r<TF> * N_0s<TF> / (TF(4.)*rho[k])
-                        * (          std::tgamma(b_r<TF> + TF(1.)) * std::tgamma(TF(3.)) * std::pow(lambda_r_i, b_r<TF> + TF(1.)) * pow3(lambda_s_i)
-                          + TF(2.) * std::tgamma(b_r<TF> + TF(2.)) * std::tgamma(TF(2.)) * std::pow(lambda_r_i, b_r<TF> + TF(2.)) * pow2(lambda_s_i)
-                          +          std::tgamma(b_r<TF> + TF(3.)) * std::tgamma(TF(1.)) * std::pow(lambda_r_i, b_r<TF> + TF(3.)) * lambda_s_i );
-
-                    // Tomita Eq. 43
-                    TF P_sacr_g = (TF(1.) - delta_2) * P_sacr;
-                    TF P_sacr_s = delta_2 * P_sacr;
-
-                    // Tomita Eq. 49
-                    const TF E_gs = std::min( TF(1.), std::exp(gamma_gacs<TF> * (T - T0<TF>)) );
-
-                    // Tomita Eq. 47
-                    TF P_gacr = !(has_graupel && has_rain) ? TF(0.) :
-                          pi<TF> * a_r<TF> * std::abs(V_Tg - V_Tr) * E_gr<TF> * N_0g<TF> * N_0r<TF> / (TF(4.)*rho[k])
-                        * (          std::tgamma(b_r<TF> + TF(1.)) * std::tgamma(TF(3.)) * std::pow(lambda_r_i, b_r<TF> + TF(1.)) * pow3(lambda_g_i)
-                          + TF(2.) * std::tgamma(b_r<TF> + TF(2.)) * std::tgamma(TF(2.)) * std::pow(lambda_r_i, b_r<TF> + TF(2.)) * pow2(lambda_g_i)
-                          +          std::tgamma(b_r<TF> + TF(3.)) * std::tgamma(TF(1.)) * std::pow(lambda_r_i, b_r<TF> + TF(3.)) * lambda_g_i );
-
-                    // Tomita Eq. 48
-                    TF P_gacs = !(has_graupel && has_snow) ? TF(0.) :
-                          pi<TF> * a_s<TF> * std::abs(V_Tg - V_Ts) * E_gs * N_0g<TF> * N_0s<TF> / (TF(4.)*rho[k])
-                        * (          std::tgamma(b_s<TF> + TF(1.)) * std::tgamma(TF(3.)) * std::pow(lambda_s_i, b_s<TF> + TF(1.)) * pow3(lambda_g_i)
-                          + TF(2.) * std::tgamma(b_s<TF> + TF(2.)) * std::tgamma(TF(2.)) * std::pow(lambda_s_i, b_s<TF> + TF(2.)) * pow2(lambda_g_i)
-                          +          std::tgamma(b_s<TF> + TF(3.)) * std::tgamma(TF(1.)) * std::pow(lambda_s_i, b_s<TF> + TF(3.)) * lambda_g_i );
-
-                    // AUTOCONVERSION.
-                    constexpr TF q_icrt = TF(0.);
-                    constexpr TF q_scrt = TF(6.e-4);
-
-                    // Tomita Eq. 53
-                    const TF beta_1 = std::min( beta_saut<TF>, beta_saut<TF>*std::exp(gamma_saut<TF> * (T - T0<TF>)) );
-
-                    // Tomita Eq. 54
-                    const TF beta_2 = std::min( beta_gaut<TF>, beta_gaut<TF>*std::exp(gamma_gaut<TF> * (T - T0<TF>)) );
-
-//                    // Tomita Eq. 50. Our Nc0 is SI units, so conversion is applied.
-//                    TF P_raut = !(has_liq) ? TF(0.) :
-//                        TF(16.7)/rho[k] * pow2(rho[k]*ql[ijk]) / (TF(5.) + TF(3.66e-2) * TF(1.e-6)*Nc0 / (D_d*rho[k]*ql[ijk]));
-
-                     // Kharoutdinov and Kogan autoconversion.
-                     TF P_raut = (has_liq) ?
-                         TF(1350.)
-                         * std::pow(ql[ijk], TF(2.47))
-                         * std::pow(Nc0 * TF(1.e-6), TF(-1.79))
-                         : TF(0.);
-
-                    // Seifert and Beheng autoconversion.
-                    // const TF x_star = TF(2.6e-10); // SB06, list of symbols, same as UCLA-LES
-                    // const TF k_cc = TF(9.44e9); // UCLA-LES (Long, 1974), 4.44e9 in SB06, p48
-                    // const TF nu_c = TF(1.); // SB06, Table 1., same as UCLA-LES
-                    // const TF kccxs = k_cc / (TF(20.) * x_star) * (nu_c+2)*(nu_c+4) / pow2(nu_c+1);
-                    // const TF xc  = rho[k] * ql[ijk] / Nc0; // Mean mass of cloud drops [kg]
-                    // const TF tau = TF(1.) - ql[ijk] / (ql[ijk] + qr[ijk] + dsmall); // SB06, Eq 5
-                    // const TF phi_au = TF(600.) * std::pow(tau, TF(0.68)) * pow3(TF(1.) - pow(tau, TF(0.68))); // UCLA-LES
-
-                    // TF P_raut = rho[k] * kccxs * pow(ql[ijk], 2) * pow(xc, 2) * (TF(1.) + phi_au / pow2(TF(1.)-tau)); // SB06, eq 4
-
-                    // Tomita Eq. 52
-                    TF P_saut = !(has_ice) ? TF(0.) :
-                        std::max(beta_1*(qi[ijk] - q_icrt), TF(0.));
-
-                    // Tomita Eq. 54
-                    TF P_gaut = !(has_snow) ? TF(0.) :
-                        std::max(beta_2*(qs[ijk] - q_scrt), TF(0.));
-
-                    // PHASE CHANGES.
-                    // Tomita Eq. 57
-                    const TF G_w = TF(1.) / (
-                        Lv<TF> / (K_a<TF> * T) * (Lv<TF> / (Rv<TF> * T) - TF(1.))
-                        + Rv<TF>*T / (K_d<TF> * esat_liq(T)) );
-
-                    // Tomita Eq. 62
-                    const TF G_i = TF(1.) / (
-                        Ls<TF> / (K_a<TF> * T) * (Ls<TF> / (Rv<TF> * T) - TF(1.))
-                        + Rv<TF>*T / (K_d<TF> * esat_ice(T)) );
-
-                    const TF S_w = (qt[ijk] - ql[ijk] - qi[ijk]) / qsat_liq(p[k], T);
-                    const TF S_i = (qt[ijk] - ql[ijk] - qi[ijk]) / qsat_ice(p[k], T);
-
-                    // Tomita Eq. 63
-                    const TF delta_3 = TF(S_i <= TF(1.)); // Subsaturated, then delta_3 = 1.
-
-                    // Tomita Eq. 59
-                    TF P_revp = !(has_rain) ? TF(0.) :
-                        - TF(2.)*pi<TF> * N_0r<TF> * (std::min(S_w, TF(1.)) - TF(1.)) * G_w / rho[k]
-                        * ( f_1r<TF> * std::tgamma(TF(2.)) * pow2(lambda_r_i)
-                          + f_2r<TF> * std::sqrt(c_r<TF> * rho0_rho_sqrt / nu<TF>)
-                          * std::tgamma( TF(0.5) * (TF(5.) + d_r<TF>) )
-                          * std::pow(lambda_r_i, TF(0.5) * (TF(5.) + d_r<TF>)) );
-
-                    // Tomita Eq. 60. Negative for sublimation, positive for deposition.
-                    const TF P_sdep_ssub = 
-                        TF(2.)*pi<TF> * N_0s<TF> * (S_i - TF(1.)) * G_i / rho[k]
-                        * ( f_1s<TF> * std::tgamma(TF(2.)) * pow2(lambda_s_i)
-                          + f_2s<TF> * std::sqrt(c_s<TF> * rho0_rho_sqrt / nu<TF>)
-                          * std::tgamma( TF(0.5) * (TF(5.) + d_s<TF>) )
-                          * std::pow(lambda_s_i, TF(0.5) * (TF(5.) + d_s<TF>)) );
-
-                    // Tomita Eq. 51
-                    const TF P_gdep_gsub = 
-                        TF(2.)*pi<TF> * N_0g<TF> * (S_i - TF(1.)) * G_i / rho[k]
-                        * ( f_1g<TF> * std::tgamma(TF(2.)) * pow2(lambda_g_i)
-                          + f_2g<TF> * std::sqrt(c_g<TF> * rho0_rho_sqrt / nu<TF>)
-                          * std::tgamma( TF(0.5) * (TF(5.) + d_g<TF>) )
-                          * std::pow(lambda_g_i, TF(0.5) * (TF(5.) + d_g<TF>)) );
-
-                    // Tomita Eq. 64
-                    TF P_sdep = !(has_vapor) ? TF(0.) :
-                        (TF(1.) - delta_3) * P_sdep_ssub;
-                    TF P_gdep = !(has_vapor) ? TF(0.) :
-                        (TF(1.) - delta_3) * P_gdep_gsub;
-
-                    // Tomita Eq. 65
-                    // CvH: I swapped the sign with respect to Tomita, the term should be positive.
-                    TF P_ssub = !(has_snow) ? TF(0.) :
-                        - delta_3 * P_sdep_ssub;
-                    TF P_gsub = !(has_graupel) ? TF(0.) :
-                        - delta_3 * P_gdep_gsub;
-
-                    // Freezing and melting
-                    // Tomita Eq. 67, 68 combined.
-                    TF P_smlt = !(has_snow) ? TF(0.) :
-                        TF(2.)*pi<TF> * K_a<TF> * (T - T0<TF>) * N_0s<TF> / (rho[k]*Lf<TF>)
-                        * ( f_1s<TF> * std::tgamma(TF(2.)) * pow2(lambda_s_i)
-                          + f_2s<TF> * std::sqrt(c_s<TF> * rho0_rho_sqrt / nu<TF>)
-                          * std::tgamma( TF(0.5) * (TF(5.) + d_s<TF>) )
-                          * std::pow(lambda_s_i, TF(0.5) * (TF(5.) + d_s<TF>)) )
-                        + C_l<TF> * (T - T0<TF>) / Lf<TF> * (P_sacw + P_sacr);
-
-                    // Tomita Eq. 69
-                    TF P_gmlt = !(has_graupel) ? TF(0.) :
-                        TF(2.)*pi<TF> * K_a<TF> * (T - T0<TF>) * N_0g<TF> / (rho[k]*Lf<TF>)
-                        * ( f_1g<TF> * std::tgamma(TF(2.)) * pow2(lambda_g_i)
-                          + f_2g<TF> * std::sqrt(c_g<TF> * rho0_rho_sqrt / nu<TF>)
-                          * std::tgamma( TF(0.5) * (TF(5.) + d_g<TF>) )
-                          * std::pow(lambda_g_i, TF(0.5) * (TF(5.) + d_g<TF>)) )
-                        + C_l<TF> * (T - T0<TF>) / Lf<TF> * (P_gacw + P_gacr);
-
-                    // Tomita Eq. 70
-                    constexpr TF A_prime = TF(0.66);
-                    constexpr TF B_prime = TF(100.);
-
-                    TF P_gfrz = !(has_rain) ? TF(0.) :
-                        TF(20.) * pi_2<TF> * B_prime * N_0r<TF> * rho_w<TF> / rho[k]
-                        * (std::exp(A_prime * (T0<TF> - T)) - TF(1.)) * pow7(lambda_r_i);
-
-                    // COMPUTE THE TENDENCIES.
-                    // Limit the production terms to avoid instability.
-                    auto limit_tend = [&](TF& tend, const TF tend_limit)
-                    {
-                        tend = std::max(TF(0.), std::min(tend, tend_limit));
-                    };
-
-                    const TF dqv_dt_max = qv      / dt;
-                    const TF dqi_dt_max = qi[ijk] / dt;
-                    const TF dql_dt_max = ql[ijk] / dt;
-                    const TF dqr_dt_max = qr[ijk] / dt;
-                    const TF dqs_dt_max = qs[ijk] / dt;
-                    const TF dqg_dt_max = qg[ijk] / dt;
-
-                    // Limit on the availability of the source.
-                    // Limit accretion terms.
-                    limit_tend(P_iacr_s, dqr_dt_max);
-                    limit_tend(P_iacr_g, dqr_dt_max);
-                    limit_tend(P_raci_s, dqi_dt_max);
-                    limit_tend(P_raci_g, dqi_dt_max);
-                    limit_tend(P_racw  , dql_dt_max);
-                    limit_tend(P_sacw  , dql_dt_max);
-                    limit_tend(P_saci  , dqi_dt_max);
-                    limit_tend(P_gacw  , dql_dt_max);
-                    limit_tend(P_gaci  , dqi_dt_max);
-                    limit_tend(P_racs  , dqs_dt_max);
-                    limit_tend(P_sacr_s, dqr_dt_max);
-                    limit_tend(P_sacr_g, dqr_dt_max);
-                    limit_tend(P_gacr  , dqr_dt_max);
-                    limit_tend(P_gacs  , dqs_dt_max);
-
-                    // Limit autoconversion terms.
-                    limit_tend(P_raut, dql_dt_max);
-                    limit_tend(P_saut, dqi_dt_max);
-                    limit_tend(P_gaut, dqs_dt_max);
-
-                    // Limit phase changes.
-                    limit_tend(P_revp, dqr_dt_max);
-                    limit_tend(P_sdep, dqv_dt_max);
-                    limit_tend(P_ssub, dqs_dt_max);
-                    limit_tend(P_gdep, dqv_dt_max);
-                    limit_tend(P_gsub, dqg_dt_max);
-                    limit_tend(P_smlt, dqs_dt_max);
-                    limit_tend(P_gmlt, dqg_dt_max);
-                    limit_tend(P_gfrz, dqr_dt_max);
-
-                    // P_iacr_s = 0;
-                    // P_iacr_g = 0;
-                    // P_raci_s = 0;
-                    // P_raci_g = 0;
-                    // P_racw   = 0;
-                    // P_sacw   = 0;
-                    // P_saci   = 0;
-                    // P_gacw   = 0;
-                    // P_gaci   = 0;
-                    // P_racs   = 0;
-                    // P_sacr_s = 0;
-                    // P_sacr_g = 0;
-                    // P_gacr   = 0;
-                    // P_gacs   = 0;
-
-                    // P_raut = 0;
-                    // P_saut = 0;
-                    // P_gaut = 0;
-
-                    // P_revp = 0;
-                    // P_sdep = 0;
-                    // P_ssub = 0;
-                    // P_gdep = 0;
-                    // P_gsub = 0;
-                    // P_smlt = 0;
-                    // P_gmlt = 0;
-                    // P_gfrz = 0;
-
-                    // MT: for the * T_pos and * T_neg I followed the table in the SCALE documentation.
-                    // I assumed that has_ice already guarantees negative temperatures.
-                    TF vapor_to_snow = P_sdep;
-                    TF vapor_to_graupel = P_gdep;
-
-                    TF cloud_to_rain = P_racw + P_sacw * T_pos + P_raut + P_gacw * T_pos;
-                    TF cloud_to_graupel = P_gacw * T_neg;
-                    TF cloud_to_snow = P_sacw * T_neg;
-
-                    TF rain_to_vapor = P_revp;
-                    TF rain_to_graupel = P_gacr * T_neg + P_iacr_g + P_sacr_g * T_neg + P_gfrz * T_neg;
-                    TF rain_to_snow = P_sacr_s * T_neg + P_iacr_s;
-
-                    TF ice_to_snow = P_raci_s + P_saci + P_saut;
-                    TF ice_to_graupel = P_raci_g + P_gaci;
-
-                    TF snow_to_graupel = P_gacs + P_racs * T_neg + P_gaut * T_neg;
-                    TF snow_to_rain = P_smlt * T_pos;
-                    TF snow_to_vapor = P_ssub;
-
-                    TF graupel_to_rain = P_gmlt * T_pos;
-                    TF graupel_to_vapor = P_gsub;
-
-                    const TF dqv_dt =
-                        - vapor_to_snow - vapor_to_graupel + snow_to_vapor + graupel_to_vapor + rain_to_vapor;
-
-                    const TF dql_dt =
-                        - cloud_to_rain - cloud_to_graupel - cloud_to_snow;
-
-                    const TF dqi_dt =
-                        - ice_to_snow - ice_to_graupel;
-
-                    const TF dqr_dt =
-                        + cloud_to_rain + snow_to_rain + graupel_to_rain
-                        - rain_to_vapor - rain_to_graupel - rain_to_snow;
-
-                    const TF dqs_dt =
-                        + cloud_to_snow + ice_to_snow + vapor_to_snow
-                        - snow_to_graupel - snow_to_vapor - snow_to_rain + rain_to_snow;
-
-                    const TF dqg_dt =
-                        + cloud_to_graupel + rain_to_graupel + ice_to_graupel
-                        + vapor_to_graupel + snow_to_graupel
-                        - graupel_to_rain - graupel_to_vapor;
-
-                    // Limit the production terms to avoid instability.
-                    auto limit_factor = [](const TF tend, const TF tend_limit)
-                    {
-                        return (tend < TF(0.)) ? std::min(-tend_limit/tend, TF(1.)) : TF(1.);
-                    };
-
-                    const TF dqv_dt_fac = limit_factor(dqv_dt, dqv_dt_max);
-                    const TF dql_dt_fac = limit_factor(dql_dt, dql_dt_max);
-                    const TF dqi_dt_fac = limit_factor(dqi_dt, dqi_dt_max);
-                    const TF dqr_dt_fac = limit_factor(dqr_dt, dqr_dt_max);
-                    const TF dqs_dt_fac = limit_factor(dqs_dt, dqs_dt_max);
-                    const TF dqg_dt_fac = limit_factor(dqg_dt, dqg_dt_max);
-
-                    vapor_to_snow    *= dqv_dt_fac * dqs_dt_fac;
-                    vapor_to_graupel *= dqv_dt_fac * dqg_dt_fac;
-
-                    cloud_to_rain    *= dql_dt_fac * dqr_dt_fac;
-                    cloud_to_graupel *= dql_dt_fac * dqg_dt_fac;
-                    cloud_to_snow    *= dql_dt_fac * dqs_dt_fac;
-
-                    rain_to_vapor    *= dqr_dt_fac * dqv_dt_fac;
-                    rain_to_graupel  *= dqr_dt_fac * dqg_dt_fac;
-                    rain_to_snow     *= dqr_dt_fac * dqs_dt_fac;
-
-                    ice_to_snow      *= dqi_dt_fac * dqs_dt_fac;
-                    ice_to_graupel   *= dqi_dt_fac * dqg_dt_fac;
-
-                    snow_to_graupel  *= dqs_dt_fac * dqg_dt_fac;
-                    snow_to_vapor    *= dqs_dt_fac * dqv_dt_fac;
-                    snow_to_rain     *= dqs_dt_fac * dqr_dt_fac;
-
-                    graupel_to_rain  *= dqg_dt_fac * dqr_dt_fac;
-                    graupel_to_vapor *= dqg_dt_fac * dqv_dt_fac;
-
-                    if (net_frz != nullptr)
-                        net_frz[ijk] =
-                              cloud_to_graupel + cloud_to_snow + rain_to_graupel + rain_to_snow
-                            + vapor_to_snow + vapor_to_graupel
-                            - snow_to_rain - graupel_to_rain - snow_to_vapor - graupel_to_vapor;
-
-                    /* Conversion of the process rates to thl and qt tendencies (thlE).
-                     * thlE is not linear in T, ql and qi, so the thl tendency cannot be summed per process
-                     * (thlD: thlt += L/(cp*exner) * rate). Instead:
-                     *   1. accumulate the changes in cloud liquid (dqc), cloud ice (dqi) and vapor (dqv),
-                     *   2. compute the latent heating dT of all phase changes at constant cp,
-                     *   3. saturation adjust the end state (T_end, qt_end) in absolute temperature,
-                     *   4. convert T_end, qc_end, qi_end to thl_end with thlE, and
-                     *   5. thlt += (thl_end - thl) / dt and qtt += dqc + dqi + dqv.
-                     * Precipitation (qr, qs, qg) is not part of thl or qt; their tendencies are added directly.
-                     */
-                    TF dqc = 0;
-                    TF dqi = 0;
-                    TF dqv = 0;
-
-                    // loss from vapor
-                    dqv -= vapor_to_snow;
-                    qst[ijk] += vapor_to_snow;
-
-                    dqv -= vapor_to_graupel;
-                    qgt[ijk] += vapor_to_graupel;
-
-                    // Loss from cloud.
-                    dqc -= cloud_to_rain;
-                    qrt[ijk] += cloud_to_rain;
-
-                    dqc -= cloud_to_graupel;
-                    qgt[ijk] += cloud_to_graupel;
-
-                    dqc -= cloud_to_snow;
-                    qst[ijk] += cloud_to_snow;
-
-                    // Loss from rain.
-                    qrt[ijk] -= rain_to_vapor;
-                    dqv += rain_to_vapor;
-
-                    qrt[ijk] -= rain_to_graupel;
-                    qgt[ijk] += rain_to_graupel;
-
-                    qrt[ijk] -= rain_to_snow;
-                    qst[ijk] += rain_to_snow;
-
-                    // Loss from ice.
-                    dqi -= ice_to_snow;
-                    qst[ijk] += ice_to_snow;
-
-                    dqi -= ice_to_graupel;
-                    qgt[ijk] += ice_to_graupel;
-
-                    // Loss from snow.
-                    qst[ijk] -= snow_to_graupel;
-                    qgt[ijk] += snow_to_graupel;
-
-                    qst[ijk] -= snow_to_vapor;
-                    dqv += snow_to_vapor;
-
-                    qst[ijk] -= snow_to_rain;
-                    qrt[ijk] += snow_to_rain;
-
-                    // Loss from graupel.
-                    qgt[ijk] -= graupel_to_rain;
-                    qrt[ijk] += graupel_to_rain;
-
-                    qgt[ijk] -= graupel_to_vapor;
-                    dqv += graupel_to_vapor;
-
-                    // State after one time step of the microphysics, before saturation adjustment.
-                    TF qc_end = ql[ijk] + dqc * dt;
-                    TF qi_end = qi[ijk] + dqi * dt;
-                    TF qv_end = qv + dqv * dt;
-                    TF qt_end = qc_end + qi_end + qv_end;
-
-                    // Latent heating [K s-1] of all phase changes, with constant Lv/Ls/Lf and cp (consistent with thlE).
-                    // Transfers within one phase (cloud_to_rain, ice_to_snow, ...) do not change T.
-                    const TF dT =   - Lv<TF> / cp<TF> * rain_to_vapor
-                                    - Ls<TF> / cp<TF> * snow_to_vapor
-                                    - Ls<TF> / cp<TF> * graupel_to_vapor
-                                    + Lf<TF> / cp<TF> * cloud_to_snow
-                                    + Lf<TF> / cp<TF> * cloud_to_graupel
-                                    - Lf<TF> / cp<TF> * snow_to_rain
-                                    - Lf<TF> / cp<TF> * graupel_to_rain
-                                    + Lf<TF> / cp<TF> * rain_to_snow
-                                    + Lf<TF> / cp<TF> * rain_to_graupel
-                                    + Ls<TF> / cp<TF> * vapor_to_graupel
-                                    + Ls<TF> / cp<TF> * vapor_to_snow;
-
-                    TF T_end = T + dT * dt;
-
-                    // Saturation adjustment of the end state in absolute temperature.
-                    Struct_sat_adjust<TF> ssa_end = sat_adjust_absolute_T_ice<TF>(T_end, qt_end, p[k], qc_end, qv_end, qi_end, Lv<TF>, Ls<TF>, cp<TF>);
-                    T_end = ssa_end.t;
-                    qc_end = ssa_end.ql;
-                    qi_end = ssa_end.qi;
-
-                    // Convert the end state to thl: thlE = T/exner / (1 + Lv*ql/(cp*T) + Ls*qi/(cp*T)).
-                    const TF thl_end = T_end/exner[k] / (1   + Lv<TF>*qc_end/(cp<TF> * T_end)
-                                                             + Ls<TF>*qi_end/(cp<TF> * T_end));
-
-                    // Tendencies of the conserved variables.
-                    TF dthl_from_dT = (thl_end - thl[ijk])/dt;
-                    qtt[ijk] += dqc + dqi + dqv;
-                    thlt[ijk] += dthl_from_dT;
-
-                    if (thl_tend_micro != nullptr)
-                        thl_tend_micro[ijk] = dthl_from_dT;
-
-                    if (qt_tend_micro != nullptr)
-                        qt_tend_micro[ijk] = dqc + dqi + dqv;
+                    is_active_row[i-istart] =
+                          int(ql[ijk] > ql_min<TF>) | int(qi[ijk] > qi_min<TF>)
+                        | int(qr[ijk] > qr_min<TF>) | int(qs[ijk] > qs_min<TF>) | int(qg[ijk] > qg_min<TF>);
                 }
+
+                for (int i=istart; i<iend; ++i)
+                {
+                    index[n_cells] = i + j*jj + k*kk;
+                    n_cells += is_active_row[i-istart];
+                }
+            }
+
+            for (int n_start=0; n_start<n_cells; n_start+=nblock)
+            {
+                const int nb = std::min(nblock, n_cells-n_start);
+                const int* const restrict ids = index.data() + n_start;
+
+                // Gather.
+                for (int n=0; n<nb; ++n)
+                {
+                    const int ijk = ids[n];
+                    qr_c[n]  = qr[ijk];
+                    qs_c[n]  = qs[ijk];
+                    qg_c[n]  = qg[ijk];
+                    ql_c[n]  = ql[ijk];
+                    qi_c[n]  = qi[ijk];
+                    qt_c[n]  = qt[ijk];
+                    thl_c[n] = thl[ijk];
+                }
+
+                conversion_block(
+                        dqr_c, dqs_c, dqg_c, dqt_c, dthl_c, frz_c,
+                        qr_c, qs_c, qg_c, ql_c, qi_c, qt_c, thl_c,
+                        cst, dt, nb);
+
+                // Scatter.
+                for (int n=0; n<nb; ++n)
+                {
+                    const int ijk = ids[n];
+                    qrt[ijk]  += dqr_c[n];
+                    qst[ijk]  += dqs_c[n];
+                    qgt[ijk]  += dqg_c[n];
+                    qtt[ijk]  += dqt_c[n];
+                    thlt[ijk] += dthl_c[n];
+                }
+
+                if (net_frz != nullptr)
+                    for (int n=0; n<nb; ++n)
+                        net_frz[ids[n]] = frz_c[n];
+
+                if (thl_tend_micro != nullptr)
+                    for (int n=0; n<nb; ++n)
+                        thl_tend_micro[ids[n]] = dthl_c[n];
+
+                if (qt_tend_micro != nullptr)
+                    for (int n=0; n<nb; ++n)
+                        qt_tend_micro[ids[n]] = dqt_c[n];
+            }
         }
     }
 
@@ -754,12 +926,107 @@ namespace
                 }
     }
 
+    // Highest level with hydrometeors that sediment (qc > qc_min), or with negative qc. Above k_top + 1,
+    // the sedimentation velocity, CFL number and flux are exactly zero. Returns kstart-1 if there are none.
+    template<typename TF>
+    int calc_k_top(
+            const TF* const restrict qc, const TF qc_min,
+            const int istart, const int jstart, const int kstart,
+            const int iend, const int jend, const int kend,
+            const int jj, const int kk)
+    {
+        for (int k=kend-1; k>=kstart; --k)
+        {
+            int n_active = 0;
+            for (int j=jstart; j<jend; ++j)
+                #pragma ivdep
+                for (int i=istart; i<iend; ++i)
+                {
+                    const int ijk = i + j*jj + k*kk;
+                    n_active += int(qc[ijk] > qc_min) | int(qc[ijk] < TF(0.));
+                }
+
+            if (n_active > 0)
+                return k;
+        }
+
+        return kstart-1;
+    }
+
+    // Terminal velocity (Tomita Eq. 27, 28) at cell centers of levels kstart to kend_s, limited between 0.1 and 10 m/s.
+    template<typename TF>
+    void calc_terminal_velocity(
+            TF* const restrict w_qc,
+            const TF* const restrict qc,
+            const TF* const restrict rho,
+            const TF a_c, const TF b_c, const TF c_c, const TF d_c, const TF N_0c,
+            const TF qc_min,
+            const int istart, const int jstart, const int kstart,
+            const int iend, const int jend, const int kend_s,
+            const int jj, const int kk)
+    {
+        constexpr TF V_Tmin = TF(0.1);
+        constexpr TF V_Tmax = TF(10.);
+
+        // V_T = c * sqrt(rho0/rho) * gamma(b+d+1)/gamma(b+1) * lambda^-d,
+        // with lambda^-d = (rho*q / (a*N_0*gamma(b+1)))^(d/(b+1)).
+        const TF V_T_fac = c_c * std::tgamma(b_c + d_c + TF(1.)) / std::tgamma(b_c + TF(1.));
+        const TF lambda_fac = TF(1.) / (a_c * N_0c * std::tgamma(b_c + TF(1.)));
+        const TF lambda_exp = d_c / (b_c + TF(1.));
+
+        auto calc_w = [&](auto lambda_pow)
+        {
+            for (int k=kstart; k<kend_s; ++k)
+            {
+                const TF V_T_fac_k = V_T_fac * std::sqrt(rho[kstart]/rho[k]);
+                const TF lambda_fac_k = lambda_fac * rho[k];
+
+                for (int j=jstart; j<jend; ++j)
+                    #pragma ivdep
+                    for (int i=istart; i<iend; ++i)
+                    {
+                        const int ijk = i + j*jj + k*kk;
+
+                        // Written as branch, such that it is skipped in empty cells if the compiler
+                        // does not vectorize this loop (without -ffast-math).
+                        TF w = TF(0.);
+                        if (qc[ijk] > qc_min)
+                        {
+                            const TF V_T = V_T_fac_k * lambda_pow(lambda_fac_k * qc[ijk]);
+                            w = std::max(V_Tmin, std::min(V_T, V_Tmax));
+                        }
+                        w_qc[ijk] = w;
+                    }
+            }
+        };
+
+        // Square roots are much cheaper than pow for the exponents of rain, graupel (1/8) and snow (1/16).
+        if (lambda_exp == TF(0.125))
+            calc_w([](const TF x) { return std::sqrt(std::sqrt(std::sqrt(x))); });
+        else if (lambda_exp == TF(0.0625))
+            calc_w([](const TF x) { return std::sqrt(std::sqrt(std::sqrt(std::sqrt(x)))); });
+        else
+            calc_w([&](const TF x) { return std::pow(x, lambda_exp); });
+
+        // Set the ghost cells.
+        for (int j=jstart; j<jend; ++j)
+            #pragma ivdep
+            for (int i=istart; i<iend; ++i)
+            {
+                const int ijk_bot = i + j*jj + (kstart-1)*kk;
+                const int ijk_top = i + j*jj + kend_s*kk;
+                w_qc[ijk_bot] = w_qc[ijk_bot+kk];
+                w_qc[ijk_top] = TF(0.);
+            }
+    }
+
     // Sedimentation based on Stevens and Seifert (2008)
     template<typename TF>
     void sedimentation_ss08(
             TF* const restrict qct, TF* const restrict rc_bot,
             TF* const restrict w_qc, TF* const restrict c_qc,
             TF* const restrict slope_qc, TF* const restrict flux_qc,
+            TF* const restrict ftot_v, TF* const restrict dzz_v, TF* const restrict cc_v,
             const TF* const restrict qc,
             const TF* const restrict rho,
             const TF* const restrict dzi, const TF* const restrict dz,
@@ -770,118 +1037,100 @@ namespace
             const int iend, const int jend, const int kend,
             const int jj, const int kk)
     {
-        constexpr TF V_Tmin = TF(0.1);
-        constexpr TF V_Tmax = TF(10.);
+        // Time step in working precision, to avoid mixed precision in the loops.
+        const TF dt_tf = TF(dt);
+
+        // All computations are limited to the levels below kend_s, above which everything is zero.
+        const int k_top = calc_k_top(qc, qc_min, istart, jstart, kstart, iend, jend, kend, jj, kk);
+        const int kend_s = std::min(k_top+3, kend);
 
         // 1. Calculate sedimentation velocity at cell center
-        for (int k=kstart; k<kend; ++k)
-        {
-            const TF rho0_rho_sqrt = std::sqrt(rho[kstart]/rho[k]);
+        calc_terminal_velocity(
+                w_qc, qc, rho,
+                a_c, b_c, c_c, d_c, N_0c, qc_min,
+                istart, jstart, kstart,
+                iend, jend, kend_s,
+                jj, kk);
 
+        // 2. Calculate CFL number using interpolated sedimentation velocity, and 3. calculate slopes
+        for (int k=kstart; k<kend_s; ++k)
             for (int j=jstart; j<jend; ++j)
                 #pragma ivdep
                 for (int i=istart; i<iend; ++i)
                 {
                     const int ijk = i + j*jj + k*kk;
-
-                    if (qc[ijk] > qc_min)
-                    {
-                        const TF lambda_c = std::pow(
-                            a_c * N_0c * std::tgamma(b_c + TF(1.))
-                            / (rho[k] * qc[ijk]),
-                            TF(1.) / (b_c + TF(1.)) );
-
-                        TF V_T =
-                            c_c * rho0_rho_sqrt
-                            * std::tgamma(b_c + d_c + TF(1.)) / std::tgamma(b_c + TF(1.))
-                            * std::pow(lambda_c, -d_c);
-
-                        // Constrain the terminal velocity between 0.1 and 10.
-                        V_T = std::max(V_Tmin, std::min(V_T, V_Tmax));
-
-                        w_qc[ijk] = V_T;
-                    }
-                    else
-                        w_qc[ijk] = TF(0.);
-                }
-        }
-
-        // 1.1 Set one ghost cell to zero
-        for (int j=jstart; j<jend; ++j)
-            for (int i=istart; i<iend; ++i)
-            {
-                const int ijk_bot = i + j*jj + (kstart-1)*kk;
-                const int ijk_top = i + j*jj + (kend    )*kk;
-                w_qc[ijk_bot] = w_qc[ijk_bot+kk];
-                w_qc[ijk_top] = TF(0.);
-            }
-
-        // 2. Calculate CFL number using interpolated sedimentation velocity
-        for (int k=kstart; k<kend; ++k)
-            for (int j=jstart; j<jend; ++j)
-                #pragma ivdep
-                for (int i=istart; i<iend; ++i)
-                {
-                    const int ijk = i + j*jj + k*kk;
-                    c_qc[ijk] = TF(0.25) * (w_qc[ijk-kk] + TF(2.)*w_qc[ijk] + w_qc[ijk+kk]) * dzi[k] * dt;
-                }
-
-        // 3. Calculate slopes
-        for (int k=kstart; k<kend; ++k)
-            for (int j=jstart; j<jend; ++j)
-                #pragma ivdep
-                for (int i=istart; i<iend; ++i)
-                {
-                    const int ijk = i + j*jj + k*kk;
+                    c_qc[ijk] = TF(0.25) * (w_qc[ijk-kk] + TF(2.)*w_qc[ijk] + w_qc[ijk+kk]) * dzi[k] * dt_tf;
                     slope_qc[ijk] = minmod(qc[ijk]-qc[ijk-kk], qc[ijk+kk]-qc[ijk]);
                 }
 
         // Calculate flux
-        // Set the fluxes at the top of the domain (kend) to zero
+        // Set the fluxes at the top of the domain (kend_s) to zero
         for (int j=jstart; j<jend; ++j)
             for (int i=istart; i<iend; ++i)
             {
-                const int ijk = i + j*jj + kend*kk;
+                const int ijk = i + j*jj + kend_s*kk;
                 flux_qc[ijk] = TF(0.);
             }
 
-        for (int k=kend-1; k>kstart-1; --k)
+        // Per level, the integration of the flux over the levels above is done for all columns
+        // in lockstep, with the state of each column in the 2D fields ftot_v, dzz_v and cc_v.
+
+        for (int k=kend_s-1; k>kstart-1; --k)
+        {
+            // q_rain
+            int n_active = 0;
             for (int j=jstart; j<jend; ++j)
                 #pragma ivdep
                 for (int i=istart; i<iend; ++i)
                 {
-                    const int ijk = i + j*jj + k*kk;
+                    const int ij = i + j*jj;
+                    const int ijk = ij + k*kk;
+                    ftot_v[ij] = TF(0.); // cumulative 'flux' (kg m-2)
+                    dzz_v[ij] = TF(0.); // distance from zh[k]
+                    cc_v[ij] = std::min(TF(1.), c_qc[ijk]);
+                    n_active += cc_v[ij] > TF(0.);
+                }
 
-                    // q_rain
-                    int kc = k; // current grid level
-                    TF ftot = TF(0.); // cumulative 'flux' (kg m-2)
-                    TF dzz = TF(0.); // distance from zh[k]
-                    TF cc = std::min(TF(1.), c_qc[ijk]);
-                    while (cc > 0 && kc < kend)
+            for (int kc=k; kc<kend && n_active>0; ++kc) // kc = current grid level
+            {
+                n_active = 0;
+                for (int j=jstart; j<jend; ++j)
+                    #pragma ivdep
+                    #pragma clang loop vectorize(enable)
+                    for (int i=istart; i<iend; ++i)
                     {
-                        const int ijkc = i + j*jj+ kc*kk;
+                        const int ij = i + j*jj;
+                        const int ijkc = ij + kc*kk;
 
-                        ftot += rho[kc] * (qc[ijkc] + TF(0.5) * slope_qc[ijkc] * (TF(1.)-cc)) * cc * dz[kc];
+                        const TF cc = cc_v[ij];
+                        const bool active = cc > TF(0.);
 
-                        dzz += dz[kc];
-                        kc += 1;
-                        cc = std::min(TF(1.), c_qc[ijkc] - dzz*dzi[kc]);
+                        const TF ftot_new = ftot_v[ij] + rho[kc] * (qc[ijkc] + TF(0.5) * slope_qc[ijkc] * (TF(1.)-cc)) * cc * dz[kc];
+                        const TF dzz_new = dzz_v[ij] + dz[kc];
+                        const TF cc_new = std::min(TF(1.), c_qc[ijkc] - dzz_new*dzi[kc+1]);
+
+                        ftot_v[ij] = active ? ftot_new : ftot_v[ij];
+                        dzz_v[ij] = active ? dzz_new : dzz_v[ij];
+                        cc_v[ij] = active ? cc_new : cc;
+                        n_active += int(active) & int(cc_new > TF(0.));
                     }
+            }
+
+            for (int j=jstart; j<jend; ++j)
+                #pragma ivdep
+                for (int i=istart; i<iend; ++i)
+                {
+                    const int ij = i + j*jj;
+                    const int ijk = ij + k*kk;
 
                     // Given flux at top, limit bottom flux such that the total rain content stays >= 0.
-                    ftot = std::min(ftot, rho[k] * dz[k] * qc[ijk] - flux_qc[ijk+kk] * TF(dt));
-                    flux_qc[ijk] = -ftot / dt;
-                }
+                    const TF ftot = std::min(ftot_v[ij], rho[k] * dz[k] * qc[ijk] - flux_qc[ijk+kk] * dt_tf);
+                    flux_qc[ijk] = -ftot / dt_tf;
 
-        // Calculate tendency
-        for (int k=kstart; k<kend; ++k)
-            for (int j=jstart; j<jend; ++j)
-                #pragma ivdep
-                for (int i=istart; i<iend; ++i)
-                {
-                    const int ijk = i + j*jj + k*kk;
+                    // Calculate tendency
                     qct[ijk] += -(flux_qc[ijk+kk] - flux_qc[ijk]) / rho[k] * dzi[k];
                 }
+        }
 
         // Store surface sedimentation flux
         // Sedimentation flux is already multiplied with density (see flux div. calculation), so
@@ -912,60 +1161,26 @@ namespace
     {
         TF cfl_max = TF(0.);
 
-        constexpr TF V_Tmin = TF(0.1);
-        constexpr TF V_Tmax = TF(10.);
+        // Above kend_s, the CFL number is exactly zero.
+        const int k_top = calc_k_top(qc, qc_min, istart, jstart, kstart, iend, jend, kend, jj, kk);
+        const int kend_s = std::min(k_top+3, kend);
 
         // 1. Calculate sedimentation velocity at cell center
-        for (int k=kstart; k<kend; ++k)
-        {
-            const TF rho0_rho_sqrt = std::sqrt(rho[kstart]/rho[k]);
-
-            for (int j=jstart; j<jend; ++j)
-                #pragma ivdep
-                for (int i=istart; i<iend; ++i)
-                {
-                    const int ijk = i + j*jj + k*kk;
-
-                    if (qc[ijk] > qc_min)
-                    {
-                        const TF lambda_c = std::pow(
-                            a_c * N_0c * std::tgamma(b_c + TF(1.))
-                            / (rho[k] * qc[ijk]),
-                            TF(1.) / (b_c + TF(1.)) );
-
-                        TF V_T =
-                            c_c * rho0_rho_sqrt
-                            * std::tgamma(b_c + d_c + TF(1.)) / std::tgamma(b_c + TF(1.))
-                            * std::pow(lambda_c, -d_c);
-
-                        // Constrain the terminal velocity between 0.1 and 10.
-                        V_T = std::max(V_Tmin, std::min(V_T, V_Tmax));
-
-                        w_qc[ijk] = V_T;
-                    }
-                    else
-                        w_qc[ijk] = TF(0.);
-                }
-        }
-
-        // 1.1 Set one ghost cell to zero
-        for (int j=jstart; j<jend; ++j)
-            for (int i=istart; i<iend; ++i)
-            {
-                const int ijk_bot = i + j*jj + (kstart-1)*kk;
-                const int ijk_top = i + j*jj + (kend    )*kk;
-                w_qc[ijk_bot] = w_qc[ijk_bot+kk];
-                w_qc[ijk_top] = TF(0.);
-            }
+        calc_terminal_velocity(
+                w_qc, qc, rho,
+                a_c, b_c, c_c, d_c, N_0c, qc_min,
+                istart, jstart, kstart,
+                iend, jend, kend_s,
+                jj, kk);
 
         // 2. Calculate CFL number using interpolated sedimentation velocity
-        for (int k=kstart; k<kend; ++k)
+        for (int k=kstart; k<kend_s; ++k)
             for (int j=jstart; j<jend; ++j)
                 #pragma ivdep
                 for (int i=istart; i<iend; ++i)
                 {
                     const int ijk = i + j*jj + k*kk;
-                    const TF cfl = TF(0.25) * (w_qc[ijk-kk] + TF(2.)*w_qc[ijk] + w_qc[ijk+kk]) * dzi[k] * dt;
+                    const TF cfl = TF(0.25) * (w_qc[ijk-kk] + TF(2.)*w_qc[ijk] + w_qc[ijk+kk]) * dzi[k] * TF(dt);
                     cfl_max = std::max(cfl, cfl_max);
                 }
 
@@ -1164,12 +1379,16 @@ void Microphys_nsw6<TF>::exec(Thermo<TF>& thermo, const double dt, Stats<TF>& st
     auto tmp2 = fields.get_tmp();
     auto tmp3 = fields.get_tmp();
     auto tmp4 = fields.get_tmp();
+    auto tmp_xy1 = fields.get_tmp_xy();
+    auto tmp_xy2 = fields.get_tmp_xy();
+    auto tmp_xy3 = fields.get_tmp_xy();
 
     // Falling rain.
     sedimentation_ss08(
             fields.st.at("qr")->fld.data(), rr_bot.data(),
             tmp1->fld.data(), tmp2->fld.data(),
             tmp3->fld.data(), tmp4->fld.data(),
+            tmp_xy1->data(), tmp_xy2->data(), tmp_xy3->data(),
             fields.sp.at("qr")->fld.data(),
             fields.rhoref.data(),
             gd.dzi.data(), gd.dz.data(),
@@ -1185,6 +1404,7 @@ void Microphys_nsw6<TF>::exec(Thermo<TF>& thermo, const double dt, Stats<TF>& st
             fields.st.at("qs")->fld.data(), rs_bot.data(),
             tmp1->fld.data(), tmp2->fld.data(),
             tmp3->fld.data(), tmp4->fld.data(),
+            tmp_xy1->data(), tmp_xy2->data(), tmp_xy3->data(),
             fields.sp.at("qs")->fld.data(),
             fields.rhoref.data(),
             gd.dzi.data(), gd.dz.data(),
@@ -1200,6 +1420,7 @@ void Microphys_nsw6<TF>::exec(Thermo<TF>& thermo, const double dt, Stats<TF>& st
             fields.st.at("qg")->fld.data(), rg_bot.data(),
             tmp1->fld.data(), tmp2->fld.data(),
             tmp3->fld.data(), tmp4->fld.data(),
+            tmp_xy1->data(), tmp_xy2->data(), tmp_xy3->data(),
             fields.sp.at("qg")->fld.data(),
             fields.rhoref.data(),
             gd.dzi.data(), gd.dz.data(),
@@ -1214,6 +1435,9 @@ void Microphys_nsw6<TF>::exec(Thermo<TF>& thermo, const double dt, Stats<TF>& st
     fields.release_tmp(tmp2);
     fields.release_tmp(tmp3);
     fields.release_tmp(tmp4);
+    fields.release_tmp_xy(tmp_xy1);
+    fields.release_tmp_xy(tmp_xy2);
+    fields.release_tmp_xy(tmp_xy3);
 
     stats.calc_tend(*fields.st.at("thl"), tend_name);
     stats.calc_tend(*fields.st.at("qt" ), tend_name);
@@ -1287,6 +1511,9 @@ void Microphys_nsw6<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime, const d
             auto c_qc = fields.get_tmp();
             auto slope_qc = fields.get_tmp();
             auto flux_qc = fields.get_tmp();
+            auto ftot_v = fields.get_tmp_xy();
+            auto dzz_v = fields.get_tmp_xy();
+            auto cc_v = fields.get_tmp_xy();
 
             std::fill(qpt->fld.begin(), qpt->fld.end(), TF(0.));
 
@@ -1298,6 +1525,7 @@ void Microphys_nsw6<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime, const d
                         qpt->fld.data(), rc_bot_tmp->data(),
                         w_qc->fld.data(), c_qc->fld.data(),
                         slope_qc->fld.data(), flux_qc->fld.data(),
+                        ftot_v->data(), dzz_v->data(), cc_v->data(),
                         fields.sp.at(varname)->fld.data(),
                         fields.rhoref.data(),
                         gd.dzi.data(), gd.dz.data(),
@@ -1327,6 +1555,9 @@ void Microphys_nsw6<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime, const d
             fields.release_tmp(c_qc);
             fields.release_tmp(slope_qc);
             fields.release_tmp(flux_qc);
+            fields.release_tmp_xy(ftot_v);
+            fields.release_tmp_xy(dzz_v);
+            fields.release_tmp_xy(cc_v);
         }
 
         if (it == "qtr_tend_frz")
