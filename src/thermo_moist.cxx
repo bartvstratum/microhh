@@ -78,7 +78,7 @@ namespace
     void calc_buoyancy_tend_2nd(
             TF* restrict wt, TF* restrict thl, TF* restrict qt, TF* restrict qhm,
             TF* restrict ph, TF* restrict thlh, TF* restrict qth, TF* restrict qhmh,
-            TF* restrict ql, TF* restrict qi, TF* restrict T, TF* restrict thvrefh,
+            TF* restrict ql, TF* restrict qi, TF* restrict T, TF* restrict qs, TF* restrict thvrefh,
             const int istart, const int iend,
             const int jstart, const int jend,
             const int kstart, const int kend,
@@ -99,16 +99,7 @@ namespace
                     qhmh[ij]  = interp2(qhm[ijk-kk], qhm[ijk]);
                 }
 
-            for (int j=jstart; j<jend; j++)
-                #pragma ivdep
-                for (int i=istart; i<iend; i++)
-                {
-                    const int ij  = i + j*jj;
-                    Struct_sat_adjust<TF> ssa = sat_adjust(thlh[ij], qth[ij], ph[k], exnh);
-                    ql[ij] = ssa.ql;
-                    qi[ij] = ssa.qi;
-                    T[ij]  = ssa.t;
-                }
+            sat_adjust_plane(ql, qi, T, qs, thlh, qth, ph[k], exnh, istart, iend, jstart, jend, jj);
 
             for (int j=jstart; j<jend; j++)
                 #pragma ivdep
@@ -461,27 +452,19 @@ namespace
 
     template<typename TF>
     void calc_ql_qi(
-            TF* restrict ql, TF* restrict qi,
+            TF* restrict ql, TF* restrict qi, TF* restrict T, TF* restrict qs,
             TF* restrict thl, TF* restrict qt, TF* restrict p,
             const int istart, const int iend,
             const int jstart, const int jend,
             const int kstart, const int kend,
             const int jj, const int kk)
     {
-        #pragma omp parallel for
         for (int k=kstart; k<kend; k++)
         {
             const TF ex = exner(p[k]);
-            for (int j=jstart; j<jend; j++)
-                #pragma ivdep
-                for (int i=istart; i<iend; i++)
-                {
-                    const int ijk = i + j*jj + k*kk;
-
-                    const auto ssa = sat_adjust(thl[ijk], qt[ijk], p[k], ex);
-                    ql[ijk] = ssa.ql;
-                    qi[ijk] = ssa.qi;
-                }
+            sat_adjust_plane(
+                    ql + k*kk, qi + k*kk, T, qs, thl + k*kk, qt + k*kk, p[k], ex,
+                    istart, iend, jstart, jend, jj);
         }
     }
 
@@ -1530,7 +1513,8 @@ void Thermo_moist<TF>::exec(const double dt, Stats<TF>& stats)
     calc_buoyancy_tend_2nd(
             fields.mt.at("w")->fld.data(), fields.sp.at("thl")->fld.data(), fields.sp.at("qt")->fld.data(), qhm->fld.data(), bs.prefh.data(),
             &tmp->fld[0*gd.ijcells], &tmp->fld[1*gd.ijcells],
-            &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells], &tmp->fld[4*gd.ijcells], &tmp->fld[5*gd.ijcells], bs.thvrefh.data(),
+            &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells], &tmp->fld[4*gd.ijcells], &tmp->fld[5*gd.ijcells],
+            &tmp->fld[6*gd.ijcells], bs.thvrefh.data(),
             gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend,
             gd.icells, gd.ijcells);
 
@@ -1799,9 +1783,14 @@ void Thermo_moist<TF>::get_ql_qi(std::vector<TF>& ql, std::vector<TF>& qi)
 {
     auto& gd = grid.get_grid_data();
 
+    auto T = fields.get_tmp_xy();
+    auto qs = fields.get_tmp_xy();
+
     calc_ql_qi(
             ql.data(), 
             qi.data(),
+            T->data(),
+            qs->data(),
             fields.sp.at("thl")->fld.data(),
             fields.sp.at("qt")->fld.data(),
             bs.pref.data(),
@@ -1809,6 +1798,9 @@ void Thermo_moist<TF>::get_ql_qi(std::vector<TF>& ql, std::vector<TF>& qi)
             gd.jstart, gd.jend,
             gd.kstart, gd.kend,
             gd.icells, gd.ijcells);
+
+    fields.release_tmp_xy(T);
+    fields.release_tmp_xy(qs);
 }
 
 template<typename TF>

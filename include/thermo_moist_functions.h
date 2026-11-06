@@ -351,6 +351,182 @@ namespace Thermo_moist_functions
         return ans;
     }
 
+    /* Saturation adjustment of all cells of one ij plane at pressure p, identical to sat_adjust(), but
+     * structured for vectorization. The unsaturated solution is computed for all cells, after which the
+     * saturated cells are collected in blocks of warm and cold cells, in which the Newton iterations of
+     * the cells run in lockstep. All arrays are indexed with ij = i + j*jj. T and qs are always computed,
+     * the caller has to provide them also if it does not need them.
+     */
+    template<typename TF>
+    void sat_adjust_plane(
+            TF* const restrict ql, TF* const restrict qi, TF* const restrict T, TF* const restrict qs,
+            const TF* const restrict thl, const TF* const restrict qt,
+            const TF p, const TF exn,
+            const int istart, const int iend, const int jstart, const int jend, const int jj)
+    {
+        constexpr int nblock = 256;
+        constexpr int nitermax = 10;
+        constexpr TF epsilon = 0.1;
+
+        // Unsaturated solution, without condensate thl = T/exn.
+        for (int j=jstart; j<jend; ++j)
+            #pragma ivdep
+            for (int i=istart; i<iend; ++i)
+            {
+                const int ij = i + j*jj;
+                const TF tl = thl[ij] * exn;
+                ql[ij] = TF(0.);
+                qi[ij] = TF(0.);
+                T[ij]  = tl;
+                qs[ij] = qsat_liq(p, tl);
+            }
+
+        auto throw_error = [](const std::string& error)
+        {
+            #ifdef USEMPI
+            std::cout << "SINGLE PROCESS EXCEPTION: " << error << std::endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            throw std::runtime_error(error);
+            #endif
+        };
+
+        // Newton iterations of a block of saturated cells, see sat_adjust() for the solver.
+        auto adjust_block = [=](const int* const restrict index, const int n, const bool is_warm)
+        {
+            TF tl_b[nblock], qt_b[nblock], tnr_b[nblock], tnr_old_b[nblock];
+            int niter_b[nblock];
+
+            for (int m=0; m<n; ++m)
+            {
+                tl_b[m] = T[index[m]];
+                qt_b[m] = qt[index[m]];
+                tnr_b[m] = tl_b[m];
+                tnr_old_b[m] = TF(1.e9);
+                niter_b[m] = 0;
+            }
+
+            for (int iter=0; iter<nitermax; ++iter)
+            {
+                int n_active = 0;
+
+                if (is_warm)
+                {
+                    #pragma ivdep
+                    for (int m=0; m<n; ++m)
+                    {
+                        const TF tnr = tnr_b[m];
+                        const bool active = std::fabs(tnr-tnr_old_b[m])/tnr_old_b[m] > TF(1.e-5);
+
+                        // BF04 E
+                        const TF f = f_E(p, tnr, qt_b[m], tl_b[m]);
+                        const TF f_prime = (f_E(p, tnr + epsilon, qt_b[m], tl_b[m]) - f)/epsilon;
+                        const TF tnr_new = tnr - f / f_prime;
+
+                        tnr_old_b[m] = active ? tnr : tnr_old_b[m];
+                        tnr_b[m] = active ? tnr_new : tnr;
+                        niter_b[m] += active;
+                        n_active += active;
+                    }
+                }
+                else
+                {
+                    #pragma ivdep
+                    for (int m=0; m<n; ++m)
+                    {
+                        const TF tnr = tnr_b[m];
+                        const bool active = std::fabs(tnr-tnr_old_b[m])/tnr_old_b[m] > TF(1.e-5);
+
+                        // BF04 E
+                        const TF f = f_E_deep(p, tnr, qt_b[m], tl_b[m]);
+                        const TF f_prime = (f_E_deep(p, tnr + epsilon, qt_b[m], tl_b[m]) - f)/epsilon;
+                        const TF tnr_new = tnr - f / f_prime;
+
+                        tnr_old_b[m] = active ? tnr : tnr_old_b[m];
+                        tnr_b[m] = active ? tnr_new : tnr;
+                        niter_b[m] += active;
+                        n_active += active;
+                    }
+                }
+
+                if (n_active == 0)
+                    break;
+            }
+
+            for (int m=0; m<n; ++m)
+            {
+                const int ij = index[m];
+                const TF tnr = tnr_b[m];
+
+                if (is_warm)
+                {
+                    qs[ij] = qsat_liq(p, tnr);
+                    ql[ij] = std::max(TF(0.), qt_b[m] - qs[ij]);
+                }
+                else
+                {
+                    const TF alpha_w = water_fraction(tnr);
+                    const TF alpha_i = TF(1.) - alpha_w;
+
+                    qs[ij] = qsat(p, tnr);
+                    const TF qlqi = std::max(TF(0.), qt_b[m] - qs[ij]);
+
+                    ql[ij] = alpha_w*qlqi;
+                    qi[ij] = alpha_i*qlqi;
+                }
+                T[ij] = tnr;
+
+                if (!is_finite_bits(tnr))
+                    throw_error("Non-finite saturation adjustment: thl, qt, p, niter = "
+                        + std::to_string(thl[ij]) + ", " + std::to_string(qt[ij]) + ", " + std::to_string(p)
+                        + ", " + std::to_string(niter_b[m]));
+
+                if (niter_b[m] == nitermax)
+                    throw_error("Non-converging saturation adjustment: thl, qt, p = "
+                        + std::to_string(thl[ij]) + ", " + std::to_string(qt[ij]) + ", " + std::to_string(p));
+            }
+        };
+
+        // Collect the saturated cells in blocks, separately for the warm and cold adjustment.
+        int index_warm[nblock];
+        int index_cold[nblock];
+        int n_warm = 0;
+        int n_cold = 0;
+
+        for (int j=jstart; j<jend; ++j)
+            for (int i=istart; i<iend; ++i)
+            {
+                const int ij = i + j*jj;
+
+                if (qt[ij] - qs[ij] > TF(0.))
+                {
+                    if (T[ij] >= T0<TF>)
+                    {
+                        index_warm[n_warm++] = ij;
+                        if (n_warm == nblock)
+                        {
+                            adjust_block(index_warm, n_warm, true);
+                            n_warm = 0;
+                        }
+                    }
+                    else
+                    {
+                        index_cold[n_cold++] = ij;
+                        if (n_cold == nblock)
+                        {
+                            adjust_block(index_cold, n_cold, false);
+                            n_cold = 0;
+                        }
+                    }
+                }
+            }
+
+        if (n_warm > 0)
+            adjust_block(index_warm, n_warm, true);
+        if (n_cold > 0)
+            adjust_block(index_cold, n_cold, false);
+    }
+
     /* Saturation adjustment in absolute temperature (not thl), used by the microphysics.
      * Input is a (possibly non-equilibrium) state T, qc, qi; tl = T - Lv/cp*qc - Ls/cp*qi is the
      * temperature after evaporating/sublimating all condensate at constant cp. This is an energy
