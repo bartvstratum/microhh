@@ -91,9 +91,10 @@ namespace
             throw std::runtime_error(error);
         }
 
-        // Interpolation factors
-        const TF f1x = (x_goal - x[i0]) / dx;
-        const TF f1y = (y_goal - y[j0]) / dy;
+        // Interpolation factors. The DEM is at the cell centers, while `x` and `y`
+        // can be at the half levels, so they cannot be used here.
+        const TF f1x = (x_goal - TF(0.5)*dx) / dx + mpi_offset_x - i0;
+        const TF f1y = (y_goal - TF(0.5)*dy) / dy + mpi_offset_y - j0;
         const TF f0x = TF(1) - f1x;
         const TF f0y = TF(1) - f1y;
 
