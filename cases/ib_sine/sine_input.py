@@ -43,7 +43,7 @@ if __name__ == "__main__":
     pl.ion()
 
     # MicroHH-mode (np.float32 (single) or np.float64 (double) precision)
-    tf = np.float64
+    tf = np.float32
 
     # Read the .ini file
     ini = Read_namelist()
