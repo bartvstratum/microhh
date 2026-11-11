@@ -887,8 +887,10 @@ void Immersed_boundary<TF>::create()
                     else
                         master.print_message("OK\n");
 
-                    // Interpolate 2D sbot onto the ghost cell boundary locations
+                    // Set the lateral ghost cells, required in the interpolation below.
+                    boundary_cyclic.exec_2d(tmp->fld_bot.data());
 
+                    // Interpolate 2D sbot onto the ghost cell boundary locations
                     for (int i=0; i<ghost.at("s").nghost; ++i)
                     {
                         ghost.at("s").sbot.at(scalar.first)[i] =
@@ -896,6 +898,8 @@ void Immersed_boundary<TF>::create()
                                    gd.x, gd.y, tmp->fld_bot, gd.dx, gd.dy,
                                    gd.icells, gd.jcells, mpi_offset_x, mpi_offset_y);
                     }
+
+                    fields.release_tmp(tmp);
                 }
                 else
                 {
