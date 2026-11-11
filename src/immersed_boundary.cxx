@@ -358,6 +358,28 @@ namespace
         const int nghost = ghost.i.size();
         ghost.nghost = nghost;
 
+        // Find per column the top of the cells inside the IB that are not ghost cells.
+        ghost.kstart = kstart;
+        ghost.k_solid_top.resize(ijcells);
+        std::fill(ghost.k_solid_top.begin(), ghost.k_solid_top.end(), kstart);
+
+        for (int j=jstart; j<jend; ++j)
+            for (int i=istart; i<iend; ++i)
+            {
+                const TF zdem = interp2_dem(
+                        x[i], y[j], x, y, dem, dx, dy,
+                        icells, jcells, mpi_offset_x, mpi_offset_y);
+
+                int k_top = kstart;
+                while (k_top < kend && z[k_top] <= zdem)
+                    ++k_top;
+                while (k_top > kstart && is_ghost_cell(dem, x, y, z, dx, dy, i, j, k_top-1,
+                                                      icells, jcells, mpi_offset_x, mpi_offset_y))
+                    --k_top;
+
+                ghost.k_solid_top[i + j*icells] = k_top;
+            }
+
         // 2. For each ghost cell, find the nearest location on the wall,
         // the image point (ghost cell mirrored across the IB),
         // and distance between image point and ghost cell.
@@ -484,6 +506,37 @@ namespace
                 fld[ijkg] = vI - grad * di[n];              // Image value minus gradient times distance
             }
         }
+    }
+
+
+    // Set the cells inside the IB that are not ghost cells to the 2D boundary
+    // value (Dirichlet), or to the value of the cell above (Neumann and flux).
+    template<typename TF>
+    void set_solid(
+            TF* const restrict fld, const TF* const restrict boundary_value,
+            const int* const restrict k_solid_top,
+            Boundary_type bc,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int kstart,
+            const int icells, const int ijcells)
+    {
+        for (int j=jstart; j<jend; ++j)
+            for (int i=istart; i<iend; ++i)
+            {
+                const int ij = i + j*icells;
+                const int k_top = k_solid_top[ij];
+
+                for (int k=kstart; k<k_top; ++k)
+                {
+                    const int ijk = ij + k*ijcells;
+
+                    if (bc == Boundary_type::Dirichlet_type)
+                        fld[ijk] = boundary_value[ij];
+                    else
+                        fld[ijk] = fld[ij + k_top*ijcells];
+                }
+            }
     }
 
 
@@ -670,6 +723,14 @@ void Immersed_boundary<TF>::exec_momentum()
             Boundary_type::Dirichlet_type, fields.visc, ghost.at("w").i.size(), n_idw_points,
             gd.icells, gd.ijcells);
 
+    // The fluid inside the IB is at rest.
+    for (auto& name : {"u", "v", "w"})
+        set_solid(
+                fields.mp.at(name)->fld.data(), ghost.at(name).mbot_2d.data(),
+                ghost.at(name).k_solid_top.data(), Boundary_type::Dirichlet_type,
+                gd.istart, gd.iend, gd.jstart, gd.jend, ghost.at(name).kstart,
+                gd.icells, gd.ijcells);
+
     boundary_cyclic.exec(fields.mp.at("u")->fld.data());
     boundary_cyclic.exec(fields.mp.at("v")->fld.data());
     boundary_cyclic.exec(fields.mp.at("w")->fld.data());
@@ -691,6 +752,12 @@ void Immersed_boundary<TF>::exec_scalars()
                 ghost.at("s").i.data(), ghost.at("s").j.data(), ghost.at("s").k.data(),
                 ghost.at("s").ip_i.data(), ghost.at("s").ip_j.data(), ghost.at("s").ip_k.data(),
                 sbcbot, it.second->visc, ghost.at("s").i.size(), n_idw_points,
+                gd.icells, gd.ijcells);
+
+        set_solid(
+                it.second->fld.data(), ghost.at("s").sbot_2d.at(it.first).data(),
+                ghost.at("s").k_solid_top.data(), sbcbot,
+                gd.istart, gd.iend, gd.jstart, gd.jend, ghost.at("s").kstart,
                 gd.icells, gd.ijcells);
 
         boundary_cyclic.exec(it.second->fld.data());
@@ -854,6 +921,10 @@ void Immersed_boundary<TF>::create()
         std::fill(ghost.at("v").mbot.begin(), ghost.at("v").mbot.begin(), 0.);
         std::fill(ghost.at("w").mbot.begin(), ghost.at("w").mbot.begin(), 0.);
 
+        ghost.at("u").mbot_2d.resize(gd.ijcells, TF(0));
+        ghost.at("v").mbot_2d.resize(gd.ijcells, TF(0));
+        ghost.at("w").mbot_2d.resize(gd.ijcells, TF(0));
+
         if (fields.sp.size() > 0)
         {
             ghost.emplace("s", Ghost_cells<TF>());
@@ -902,12 +973,16 @@ void Immersed_boundary<TF>::create()
                                    gd.icells, gd.jcells, mpi_offset_x, mpi_offset_y);
                     }
 
+                    ghost.at("s").sbot_2d.emplace(scalar.first, tmp->fld_bot);
+
                     fields.release_tmp(tmp);
                 }
                 else
                 {
                     for (int i=0; i<ghost.at("s").nghost; ++i)
                         ghost.at("s").sbot.at(scalar.first)[i] = sbc.at(scalar.first);
+
+                    ghost.at("s").sbot_2d.emplace(scalar.first, std::vector<TF>(gd.ijcells, sbc.at(scalar.first)));
                 }
             }
 

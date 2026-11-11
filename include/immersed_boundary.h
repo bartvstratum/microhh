@@ -74,6 +74,12 @@ struct Ghost_cells
     // Spatially varying scalar (and momentum..) boundary conditions
     std::map<std::string, std::vector<TF>> sbot;
     std::vector<TF> mbot;
+
+    // Cells inside the IB that are not ghost cells: [kstart, k_solid_top).
+    int kstart;
+    std::vector<int> k_solid_top;
+    std::map<std::string, std::vector<TF>> sbot_2d;
+    std::vector<TF> mbot_2d;
     
     //
     // GPU 
@@ -109,6 +115,10 @@ struct Ghost_cells
     // Spatially varying scalar (and momentum..) boundary conditions
     std::map<std::string, TF*> sbot_g;
     TF* mbot_g;
+
+    int* k_solid_top_g;
+    std::map<std::string, TF*> sbot_2d_g;
+    TF* mbot_2d_g;
 };
 
 // Convenience struct to simplify sorting

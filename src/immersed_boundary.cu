@@ -76,6 +76,36 @@ namespace
             }
         }
     }
+
+    template<typename TF> __global__
+    void set_solid_g(
+            TF* const __restrict__ fld, const TF* const __restrict__ boundary_value,
+            const int* const __restrict__ k_solid_top,
+            Boundary_type bc,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int kstart,
+            const int icells, const int ijcells)
+    {
+        const int i = blockIdx.x*blockDim.x + threadIdx.x + istart;
+        const int j = blockIdx.y*blockDim.y + threadIdx.y + jstart;
+
+        if (i < iend && j < jend)
+        {
+            const int ij = i + j*icells;
+            const int k_top = k_solid_top[ij];
+
+            for (int k=kstart; k<k_top; ++k)
+            {
+                const int ijk = ij + k*ijcells;
+
+                if (bc == Boundary_type::Dirichlet_type)
+                    fld[ijk] = boundary_value[ij];
+                else
+                    fld[ijk] = fld[ij + k_top*ijcells];
+            }
+        }
+    }
 }
 
 #ifdef USECUDA
@@ -131,6 +161,22 @@ void Immersed_boundary<TF>::exec_momentum()
             gd.icells, gd.ijcells);
     cuda_check_error();
 
+    // The fluid inside the IB is at rest.
+    const int blockii = gd.ithread_block;
+    const int blockjj = gd.jthread_block;
+    dim3 grid2dGPU(gd.imax/blockii + (gd.imax%blockii > 0), gd.jmax/blockjj + (gd.jmax%blockjj > 0));
+    dim3 block2dGPU(blockii, blockjj);
+
+    for (auto& name : {"u", "v", "w"})
+    {
+        set_solid_g<TF><<<grid2dGPU, block2dGPU>>>(
+                fields.mp.at(name)->fld_g, ghost.at(name).mbot_2d_g,
+                ghost.at(name).k_solid_top_g, Boundary_type::Dirichlet_type,
+                gd.istart, gd.iend, gd.jstart, gd.jend, ghost.at(name).kstart,
+                gd.icells, gd.ijcells);
+        cuda_check_error();
+    }
+
     boundary_cyclic.exec_g(fields.mp.at("u")->fld_g);
     boundary_cyclic.exec_g(fields.mp.at("v")->fld_g);
     boundary_cyclic.exec_g(fields.mp.at("w")->fld_g);
@@ -153,6 +199,11 @@ void Immersed_boundary<TF>::exec_scalars()
         dim3 gridGPU(grid);
         dim3 blockGPU(blocki);
 
+        const int blockii = gd.ithread_block;
+        const int blockjj = gd.jthread_block;
+        dim3 grid2dGPU(gd.imax/blockii + (gd.imax%blockii > 0), gd.jmax/blockjj + (gd.jmax%blockjj > 0));
+        dim3 block2dGPU(blockii, blockjj);
+
         for (auto& it : fields.sp)
         {
             set_ghost_cells_g<TF><<<gridGPU, blockGPU>>>(
@@ -162,6 +213,13 @@ void Immersed_boundary<TF>::exec_scalars()
                     ghost.at("s").ip_i_g, ghost.at("s").ip_j_g, ghost.at("s").ip_k_g,
                     sbcbot, it.second->visc, nghost_s, n_idw_points,
                     gd.icells, gd.ijcells);
+
+            set_solid_g<TF><<<grid2dGPU, block2dGPU>>>(
+                    it.second->fld_g, ghost.at("s").sbot_2d_g.at(it.first),
+                    ghost.at("s").k_solid_top_g, sbcbot,
+                    gd.istart, gd.iend, gd.jstart, gd.jend, ghost.at("s").kstart,
+                    gd.icells, gd.ijcells);
+            cuda_check_error();
 
             boundary_cyclic.exec_g(it.second->fld_g);
         }
@@ -246,6 +304,25 @@ void Immersed_boundary<TF>::prepare_device()
             for (auto& it : g.second.sbot)
                 cuda_safe_call(cudaMemcpy(g.second.sbot_g.at(it.first), g.second.sbot.at(it.first).data(), 
                                fmemsize_1d, cudaMemcpyHostToDevice));
+
+        // Cells inside the IB that are not ghost cells
+        const int imemsize_ij = gd.ijcells*sizeof(int);
+        const int fmemsize_ij = gd.ijcells*sizeof(TF);
+
+        cuda_safe_call(cudaMalloc(&g.second.k_solid_top_g, imemsize_ij));
+        cuda_safe_call(cudaMemcpy(g.second.k_solid_top_g, g.second.k_solid_top.data(), imemsize_ij, cudaMemcpyHostToDevice));
+
+        if (g.first == "u" || g.first == "v" || g.first == "w")
+        {
+            cuda_safe_call(cudaMalloc(&g.second.mbot_2d_g, fmemsize_ij));
+            cuda_safe_call(cudaMemcpy(g.second.mbot_2d_g, g.second.mbot_2d.data(), fmemsize_ij, cudaMemcpyHostToDevice));
+        }
+        else
+            for (auto& it : g.second.sbot_2d)
+            {
+                cuda_safe_call(cudaMalloc(&g.second.sbot_2d_g[it.first], fmemsize_ij));
+                cuda_safe_call(cudaMemcpy(g.second.sbot_2d_g.at(it.first), it.second.data(), fmemsize_ij, cudaMemcpyHostToDevice));
+            }
     }    
 }
 
@@ -279,6 +356,14 @@ void Immersed_boundary<TF>::clear_device()
 
         cuda_safe_call(cudaFree(g.second.c_idw_g));
         cuda_safe_call(cudaFree(g.second.c_idw_sum_g));
+
+        cuda_safe_call(cudaFree(g.second.k_solid_top_g));
+
+        if (g.first == "u" || g.first == "v" || g.first == "w")
+            cuda_safe_call(cudaFree(g.second.mbot_2d_g));
+        else
+            for (auto& it : g.second.sbot_2d_g)
+                cuda_safe_call(cudaFree(it.second));
     }
 }
 
