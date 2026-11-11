@@ -828,12 +828,14 @@ void Immersed_boundary<TF>::create()
                 gd.icells, gd.jcells, gd.ijcells,
                 mpi_offset_x, mpi_offset_y);
 
+        // Vertical velocity at the bottom boundary (kstart) is set by the bottom BC,
+        // and is never a ghost cell or interpolation point.
         master.print_message("Calculating ghost cells w\n");
         calc_ghost_cells(
                 ghost.at("w"), dem, gd.x, gd.y, gd.zh,
                 Boundary_type::Dirichlet_type,
                 gd.dx, gd.dy, gd.dzh, n_idw_points,
-                gd.istart, gd.jstart, gd.kstart,
+                gd.istart, gd.jstart, gd.kstart+1,
                 gd.iend,   gd.jend,   gd.kend,
                 gd.icells, gd.jcells, gd.ijcells,
                 mpi_offset_x, mpi_offset_y);
