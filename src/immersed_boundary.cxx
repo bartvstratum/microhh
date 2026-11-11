@@ -302,7 +302,8 @@ namespace
         // Temp vector for calculations
         std::vector<TF> tmp(n_idw);
 
-        // Calculate distances interpolation points -> image point
+        // Calculate distances interpolation points -> image point. Limit the distance
+        // to prevent infinite weights if the image point coincides with a grid point.
         for (int i=0; i<n; ++i)
         {
             const int ii  = i + index * n_idw;
@@ -310,7 +311,7 @@ namespace
             const int ipj = ip_j[ii];
             const int ipk = ip_k[ii];
 
-            tmp[i] = absolute_distance(xi, yi, zi, x[ipi], y[ipj], z[ipk]);
+            tmp[i] = std::max(absolute_distance(xi, yi, zi, x[ipi], y[ipj], z[ipk]), TF(1e-9));
             dist_max = std::max(dist_max, tmp[i]);
         }
 
