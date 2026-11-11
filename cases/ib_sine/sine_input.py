@@ -70,7 +70,7 @@ if __name__ == "__main__":
 
     # Create initial profiles:
     z = grid.z
-    u = 0.00137 * np.ones(z.size)
+    u = 0.11 * np.ones(z.size)
     b = z
 
     # Write the data to a .nc file for MicroHH
